@@ -3,6 +3,8 @@ from pathlib import Path
 from nova_lab.experiments.registry import load_variants
 from nova_lab.experiments.runner import ExperimentRunner, blinded_order
 from nova_lab.models.experiment import ExperimentDefinition
+from nova_lab.models.experiment import ExperimentObservation
+from nova_lab.personas.factory import PersonaFactory
 from nova_lab.models.persona import ParentPersona
 from nova_lab.providers.deterministic import DeterministicEngine
 from nova_lab.storage.jsonl import append_jsonl, read_jsonl
@@ -71,3 +73,41 @@ def test_jsonl_storage_round_trips_records_and_creates_parent_directory(tmp_path
     append_jsonl(path, records)
 
     assert read_jsonl(path) == records
+
+
+def test_runner_hides_original_identity_from_provider_and_restores_mapping():
+    class RecordingProvider:
+        def __init__(self):
+            self.seen = []
+
+        def evaluate_parent(self, parent, variant, context):
+            self.seen.append((variant, context))
+            return ExperimentObservation(run_id=context["run_id"], experiment_id=context["experiment_id"],
+                persona_id=parent.persona_id, variant_id=variant.variant_id,
+                metrics={"trust": 10 if variant.privacy_first else 1})
+
+    provider = RecordingProvider()
+    originals = load_variants(Path("config/variants.yaml"))
+    experiment = ExperimentDefinition(experiment_id="blind", family="privacy", hypothesis="h",
+        success_criteria="s", scenario="s", variant_ids=list(originals))
+    runner = ExperimentRunner(provider, 42)
+    rows = runner.run_parent_experiment("r", experiment, PersonaFactory(1).make_parents(1), originals)
+    assert {row.variant_id for row in rows} == set(originals)
+    assert all(variant.variant_id not in originals for variant, _ in provider.seen)
+    assert all(variant.label.startswith("Concept ") for variant, _ in provider.seen)
+    assert all(variant.label not in {v.label for v in originals.values()} for variant, _ in provider.seen)
+    assert all("variant_id" not in context and "label" not in context for _, context in provider.seen)
+    assert all(row.metrics["trust"] == (10 if originals[row.variant_id].privacy_first else 1) for row in rows)
+    assert all(row.blinded_variant_id == variant.variant_id for row, (variant, _) in zip(rows, provider.seen))
+
+
+def test_jsonl_reads_utf8_even_when_locale_default_is_ascii(tmp_path, monkeypatch):
+    path = tmp_path / "umlauts.jsonl"
+    append_jsonl(path, [{"text": "Neugier für 179 €"}])
+    original_read = Path.read_text
+
+    def locale_read(self, encoding=None, **kwargs):
+        return original_read(self, encoding=encoding or "ascii", **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", locale_read)
+    assert read_jsonl(path) == [{"text": "Neugier für 179 €"}]

@@ -37,6 +37,11 @@ def test_only_recognized_objections_reduce_the_score():
     assert apply_positivity_penalty(80, ["would_not_buy", "would_not_buy", "other"]) == 64
 
 
+def test_privacy_and_price_penalties_have_a_zero_floor():
+    assert apply_positivity_penalty(80, ["privacy_or_ai_trust", "price"]) == 64
+    assert apply_positivity_penalty(5, ["privacy_or_ai_trust", "price"]) == 0
+
+
 @dataclass
 class Observation:
     persona_id: str

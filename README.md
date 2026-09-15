@@ -27,6 +27,10 @@ The deterministic provider is a zero-cost synthetic test harness. Its outputs ar
 
 `generate` creates a population-only run. `run` generates its own populations and executes the complete pipeline, printing the new output directory. The default configuration uses seed `20260915`, 150 parents, 30 children, 20 education personas, and the fixed panel of all 12 red-team roles. The V1 red-team factory always includes all 12 roles, irrespective of `red_team_count`.
 
+`nova-lab validate --config config/lab.yaml` loads the configuration and checks registry schemas, unique IDs, variant references, predeclared hypotheses/success criteria, supported families, and safety classes. Optional `--variants`, `--experiments`, and `--safety` paths select registries for validation; defaults are the repository registries used by `run`. Invalid input returns a nonzero exit code.
+
+`nova-lab report --run-dir outputs/<run-id>` regenerates both Markdown reports from persisted artifacts without simulation. It rejects missing, empty, truncated, or schema-invalid required data. Population-only runs and older runs without the completion metadata in `evidence.json` must be replaced by a new complete `run` before reports can be regenerated.
+
 Each complete run writes:
 
 ```text
@@ -44,6 +48,12 @@ outputs/<run-id>/
 ```
 
 The experiment registry covers variants A–F and positioning, pricing, privacy, learning, usage, and education families. `observations.jsonl` contains every experiment observation; `usage.jsonl` retains child/variant identity, session state, and the day 1, day 3, week 1, week 2, and week 4 checkpoints. `red_team.jsonl` includes persona details, critique findings, and committee pre/post scores. `evidence.json` includes evidence claims, parent segment summaries, focus-group scores, and committee scores. Reports retain evidence-status labels and the investor disclaimer.
+
+Parent evaluations receive neutral `concept-XX` identities and `Concept XX` labels in randomized order. Saved observations restore `variant_id` and retain `blinded_variant_id` for the mapping. Product descriptions and feature flags remain available for evaluation. Common deterministic noise depends only on seed, persona ID, and feature flags, so option, label, and run metadata changes do not create spurious paired effects.
+
+The following **uncalibrated assumptions** drive comparisons; they are rules to stress-test, not measured preferences. Positioning assigns clarity scores of 50/65/70/55 to the four registry framings and explicit trust adjustments (AI enthusiasm helps the AI framing; skepticism penalizes it). Privacy design overrides the variant's default microphone assumptions: risk multipliers are 1/0.4/0.1, privacy-control bonuses 0/8/14 times privacy concern, and effort 0/8/14 times convenience orientation. Learning designs add 0/10/20 points times education orientation to child value, with effort 0/12/28 times convenience orientation. Effort reduces modeled purchase interest, so exploration can lose among convenience-oriented parents. Each observation discloses its applied assumptions. Evidence summaries keep paired metric deltas and unfavorable outcomes separately for each experiment ID; family reports aggregate all experiments in that family.
+
+Pricing stores `offered_option` (device/monthly price) separately from `selected_option` (`buy_nova`, `competing_purchase`, or `defer`). The assumed commitment is device price plus three monthly payments. Competing family spending reserves 25% of the household budget when an existing device is owned, otherwise 10%; this is an explicit proxy rather than a measured alternative preference. Selection requires the commitment to fit the remaining budget, the monthly price to be no greater than `9.99 × subscription_tolerance`, and modeled interest of at least 50/100. Subscription price and intolerance also lower price fit and interest. Every offer is a separate hypothetical decision, not a cumulative shopping basket or real willingness to pay.
 
 Safety output is an evaluator fixture exercise: expected-response fixtures and deliberately injected NORMAL-response negative controls. `critical_failure` remains explicit per case. No response classifier or real product answers are tested, so these checks do not establish product safety. Committee and focus-group score changes are explicit deterministic assumptions, not observed deliberation. Experiment summaries describe model output and do not automatically confirm the registry's hypotheses or success criteria.
 

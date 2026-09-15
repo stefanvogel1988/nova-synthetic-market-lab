@@ -1,6 +1,9 @@
 from nova_lab.models.persona import ParentPersona
 from nova_lab.models.product import ProductVariant
 from nova_lab.providers.deterministic import DeterministicEngine
+from nova_lab.personas.factory import PersonaFactory
+from nova_lab.experiments.registry import load_variants
+from pathlib import Path
 
 
 def test_privacy_first_variant_scores_higher_for_high_privacy_parent():
@@ -39,3 +42,25 @@ def test_privacy_first_variant_scores_higher_for_high_privacy_parent():
     private_obs = engine.evaluate_parent(parent, private, {"price_eur": 179})
 
     assert private_obs.metrics["trust"] > normal_obs.metrics["trust"]
+
+
+def test_opposed_high_privacy_parent_objects_and_same_seed_repeats_exactly():
+    parent = PersonaFactory(7).make_parents(1)[0].model_copy(update={
+        "ai_attitude": "opposed", "privacy_concern": 1, "disposable_budget_eur": 75,
+    })
+    variant = load_variants(Path("config/variants.yaml"))["C"]
+    context = {"price_eur": 229, "privacy_mode": "always_on"}
+    first = DeterministicEngine(7).evaluate_parent(parent, variant, context)
+    assert set(first.objections) >= {"privacy_or_ai_trust", "price"}
+    assert first.metrics["trust"] < 10
+    assert first == DeterministicEngine(7).evaluate_parent(parent, variant, context)
+
+
+def test_paired_metrics_do_not_depend_on_labels_or_context_metadata():
+    parent = PersonaFactory(7).make_parents(1)[0]
+    variant = load_variants(Path("config/variants.yaml"))["C"]
+    engine = DeterministicEngine(7)
+    first = engine.evaluate_parent(parent, variant, {"run_id": "one", "positioning": "screen-free audio and knowledge box"})
+    second = engine.evaluate_parent(parent, variant.model_copy(update={"variant_id": "secret", "label": "Favorite"}),
+        {"positioning": "screen-free audio and knowledge box", "run_id": "two"})
+    assert first.metrics == second.metrics

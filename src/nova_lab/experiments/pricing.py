@@ -13,8 +13,8 @@ def affordable(
     device_price: float, monthly_subscription: float, gift_budget: float
 ) -> bool:
     """Return whether a three-month subscription commitment fits the budget."""
-    first_year_commitment = device_price + monthly_subscription * 3
-    return first_year_commitment <= gift_budget
+    three_month_commitment = device_price + monthly_subscription * 3
+    return three_month_commitment <= gift_budget
 
 
 def pricing_contexts() -> list[dict[str, float | int]]:
@@ -35,18 +35,45 @@ def run_pricing(
 ) -> list[ExperimentObservation]:
     """Evaluate every constrained price/subscription choice locally."""
     observations: list[ExperimentObservation] = []
+    by_parent = {parent.persona_id: parent for parent in parents}
     for context in pricing_contexts():
         option = f"{context['price_eur']}/{context['subscription_eur']}"
         for observation in runner.run_parent_experiment(
             run_id, experiment, parents, variants, context
         ):
+            parent = by_parent[observation.persona_id]
+            price, subscription = context["price_eur"], context["subscription_eur"]
+            # Explicit uncalibrated proxy for competing family spending. Existing
+            # audio hardware increases the opportunity cost of another device.
+            competing_budget = parent.disposable_budget_eur * (0.25 if parent.existing_devices else 0.10)
+            available = parent.disposable_budget_eur - competing_budget
+            fits = affordable(price, subscription, available)
+            tolerates = subscription <= 9.99 * parent.subscription_tolerance
+            selected = fits and tolerates and observation.metrics["purchase_interest"] >= 50
+            objections = list(observation.objections)
+            if not fits:
+                objections.append("price")
+            if not tolerates:
+                objections.append("subscription")
+            if not selected:
+                objections.append("would_not_buy")
+            decision = "buy_nova" if selected else "competing_purchase" if parent.existing_devices else "defer"
             observations.append(
                 observation.model_copy(
                     update={
-                        "selected_option": option,
+                        "offered_option": option,
+                        "selected_option": decision,
+                        "objections": sorted(set(objections)),
+                        "metrics": {**observation.metrics,
+                            "commitment_eur": round(price + 3 * subscription, 2),
+                            "available_budget_eur": round(available, 2),
+                            "competing_budget_eur": round(competing_budget, 2),
+                            "selected_nova": float(selected)},
                         "rationale": (
                             f"{observation.rationale}; synthetic-only pricing result; "
-                            "not real demand or willingness to pay"
+                            "not real demand or willingness to pay; ASSUMPTION: three-month commitment; "
+                            "reserve 25% of budget for competing purchases when devices are owned, otherwise 10%; "
+                            "monthly tolerance ceiling=9.99*tolerance; select only if affordable, tolerated and interest>=50"
                         ),
                     }
                 )

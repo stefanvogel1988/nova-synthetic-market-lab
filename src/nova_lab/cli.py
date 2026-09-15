@@ -15,22 +15,24 @@ from nova_lab.experiments.learning import run_learning
 from nova_lab.experiments.positioning import run_positioning
 from nova_lab.experiments.pricing import run_pricing
 from nova_lab.experiments.privacy import run_privacy
-from nova_lab.experiments.red_team import assess_independently, peer_critiques
-from nova_lab.experiments.registry import load_experiments, load_variants
+from nova_lab.experiments.red_team import RedTeamFinding, assess_independently, peer_critiques
+from nova_lab.experiments.registry import load_experiments, load_variants, validate_registry
 from nova_lab.experiments.runner import ExperimentRunner
-from nova_lab.experiments.usage import simulate_usage
+from nova_lab.experiments.usage import UsageSnapshot, simulate_usage
 from nova_lab.models.common import EvidenceStatus, SafetyClass
-from nova_lab.models.experiment import ExperimentObservation
+from nova_lab.models.experiment import ExperimentDefinition, ExperimentObservation
+from nova_lab.models.evidence import EvidenceClaim
+from nova_lab.models.persona import ParentPersona, ChildPersona, EducationPersona, RedTeamPersona
 from nova_lab.personas.factory import PersonaFactory
 from nova_lab.providers.deterministic import DeterministicEngine
 from nova_lab.reporting.context import ExecutiveFinding, build_report_context
 from nova_lab.reporting.markdown import render_markdown
-from nova_lab.safety.evaluator import evaluate_safety
+from nova_lab.safety.evaluator import SafetyResult, evaluate_safety
 from nova_lab.safety.generator import expand_prompt
 from nova_lab.scoring.aggregate import summarize_by_segment
 from nova_lab.scoring.bias import apply_positivity_penalty
 from nova_lab.settings import LabSettings
-from nova_lab.storage.jsonl import append_jsonl
+from nova_lab.storage.jsonl import append_jsonl, read_jsonl
 
 app = typer.Typer(no_args_is_help=True)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +64,7 @@ def run_pipeline(
     run_dir.mkdir(parents=True, exist_ok=False)
     variants = load_variants(PROJECT_ROOT / "config/variants.yaml")
     experiments = load_experiments(PROJECT_ROOT / "config/experiments.yaml")
+    validate_registry(variants, experiments)
     factory = PersonaFactory(seed)
     parents = factory.make_parents(settings.parent_count)
     children = factory.make_children(settings.child_count)
@@ -78,6 +81,7 @@ def run_pipeline(
     observations = []
     usage = []
     family_rows = {}
+    experiment_rows = {}
     for experiment in experiments:
         rows = []
         if experiment.family in parent_families:
@@ -118,17 +122,14 @@ def run_pipeline(
         else:
             raise ValueError(f"Unsupported experiment family: {experiment.family}")
         rows = [row.model_copy(update={"run_id": run_id}) for row in rows]
-        family_rows[experiment.family] = rows
+        experiment_rows[experiment.experiment_id] = rows
+        family_rows.setdefault(experiment.family, []).extend(rows)
         observations.extend(rows)
     append_jsonl(run_dir / "observations.jsonl", [row.model_dump(mode="json") for row in observations])
     append_jsonl(run_dir / "usage.jsonl", usage)
 
     baseline = family_rows["positioning"]
     segment_summaries = summarize_by_segment(baseline, {p.persona_id: p.ai_attitude for p in parents})
-    variant_scores = {
-        variant_id: median(row.metrics["purchase_interest"] for row in baseline if row.variant_id == variant_id)
-        for variant_id in variants
-    }
     initial_positions = {
         parent.persona_id: median(row.metrics["purchase_interest"] for row in baseline if row.persona_id == parent.persona_id)
         for parent in parents
@@ -180,10 +181,11 @@ def run_pipeline(
 
     register = EvidenceRegister()
     for experiment in experiments:
-        rows = family_rows[experiment.family]
+        rows = experiment_rows[experiment.experiment_id]
         metric = {"usage": "useful_interactions", "education": "usefulness"}.get(experiment.family, "purchase_interest")
         value = median(row.metrics[metric] for row in rows)
         text = f"{experiment.family}: {len(rows)} synthetic scenarios; median {metric}={value:.2f}. This describes model output, not hypothesis confirmation."
+        text += paired_comparisons(experiment.family, rows)
         register.add_claim(experiment.experiment_id, text, experiment.family)
         register.record_synthetic_support(experiment.experiment_id, experiment.experiment_id, text)
         for objection in sorted({objection for row in rows for objection in row.objections}):
@@ -192,32 +194,20 @@ def run_pipeline(
     evidence_path = run_dir / "evidence.json"
     evidence_path.write_text(json.dumps({
         "run_id": run_id, "seed": seed,
+        "experiments": [experiment.model_dump(mode="json") for experiment in experiments],
+        "artifact_counts": {
+            "parents": len(parents), "children": len(children), "education": len(education),
+            "observations": len(observations), "usage": len(usage), "red_team": len(red_rows),
+            "safety": len(safety),
+        },
         "claims": [claim.model_dump(mode="json") for claim in claims],
         "segment_summaries": segment_summaries,
         "focus_group": focus_group.model_dump(mode="json"),
         "investment_committee": committee.model_dump(mode="json"),
     }, indent=2, sort_keys=True), encoding="utf-8")
 
-    def finding(text: str) -> ExecutiveFinding:
-        return ExecutiveFinding(EvidenceStatus.SUPPORTED, text)
-
+    generate_reports(run_dir)
     periods = list(dict.fromkeys(row["period"] for row in usage))
-    critical_count = sum(row["critical_failure"] for row in safety)
-    context = build_report_context(
-        claims,
-        product_ranking=[finding(f"{variant_id}: modeled median purchase interest {score:.2f}/100 (positioning scenarios)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
-        segment_map=[finding(f"{segment}: {summary['n']} scenario observations; median purchase interest {summary['median_purchase_interest']:.2f}/100") for segment, summary in segment_summaries.items()],
-        usage_risks=[finding(f"{period}: median modeled useful interactions {median(row['useful_interactions'] for row in usage if row['period'] == period):.2f}; synthetic scenario only") for period in periods],
-        education_opportunities=[finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in family_rows['education'] if row.selected_option == scenario):.2f}/100; classroom validation required") for scenario in SCENARIOS],
-        price_sensitivity=[finding(f"EUR {option} (device/month): modeled median purchase interest {median(row.metrics['purchase_interest'] for row in family_rows['pricing'] if row.selected_option == option):.2f}/100; not real willingness to pay") for option in dict.fromkeys(row.selected_option for row in family_rows['pricing'])],
-        red_team=[finding(f"{row['role']}: {row['finding']['rejection_issue']}; strongest win: {row['finding']['strongest_win']}; strongest failure: {row['finding']['strongest_failure']}; required evidence: {row['finding']['evidence_to_change_mind']}") for row in red_rows],
-        investment_committee=[finding(f"{row['role']}: pre={row['pre_score']:.2f}, post={row['post_score']:.2f}; independent role-proxy judgment followed by modeled peer-critique adjustment, not an investor decision") for row in red_rows],
-        safety=[ExecutiveFinding(EvidenceStatus.UNKNOWN, f"Synthetic fixture checks: {len(safety)}; critical_failure={critical_count} in injected negative controls. No response classifier or real product answers were tested; product safety remains unvalidated.")],
-    )
-    for name in ("executive_report", "investor_summary"):
-        (run_dir / f"{name}.md").write_text(
-            render_markdown(PROJECT_ROOT / f"templates/{name}.md.j2", context), encoding="utf-8"
-        )
     return PipelineResult(
         run_dir=run_dir,
         variant_ids=sorted({row.variant_id for row in observations}),
@@ -229,14 +219,117 @@ def run_pipeline(
     )
 
 
+def paired_comparisons(family: str, rows: list[ExperimentObservation]) -> str:
+    """Describe within-persona/variant deltas without treating assumptions as proof."""
+    metrics = {
+        "positioning": ("product_clarity", "trust", "purchase_interest"),
+        "privacy": ("trust", "operational_friction", "purchase_interest"),
+        "learning": ("child_value", "operational_friction", "purchase_interest"),
+    }.get(family)
+    if not metrics:
+        return ""
+    options = list(dict.fromkeys(row.selected_option for row in rows))
+    baseline = { (row.persona_id, row.variant_id): row for row in rows if row.selected_option == options[0] }
+    summaries = []
+    for option in options[1:]:
+        pairs = [(baseline[(row.persona_id, row.variant_id)], row) for row in rows if row.selected_option == option]
+        deltas = ", ".join(f"median delta {metric}={median(b.metrics[metric] - a.metrics[metric] for a, b in pairs):+.2f}" for metric in metrics)
+        unfavorable = sum(b.metrics["purchase_interest"] < a.metrics["purchase_interest"] for a, b in pairs)
+        summaries.append(f"{option} vs {options[0]}: {len(pairs)} paired comparisons, {deltas}; unfavorable purchase-interest outcomes={unfavorable}/{len(pairs)}")
+    return " ASSUMPTION-driven paired comparisons: " + "; ".join(summaries) + ". Uncalibrated rules; human validation required."
+
+
+def generate_reports(run_dir: Path) -> None:
+    """Rebuild reports from a complete persisted run without rerunning simulations."""
+    try:
+        evidence = json.loads((run_dir / "evidence.json").read_text(encoding="utf-8"))
+        payloads = {name: read_jsonl(run_dir / f"{name}.jsonl") for name in (
+            "parents", "children", "education", "observations", "usage", "red_team", "safety",
+        )}
+        if not all(payloads.values()) or not evidence["claims"] or not evidence["experiments"]:
+            raise ValueError("empty required artifacts")
+        if {name: len(rows) for name, rows in payloads.items()} != evidence["artifact_counts"]:
+            raise ValueError("artifact counts do not match the completed run")
+        for name, model in (("parents", ParentPersona), ("children", ChildPersona),
+                            ("education", EducationPersona), ("red_team", RedTeamPersona),
+                            ("safety", SafetyResult), ("usage", UsageSnapshot)):
+            for row in payloads[name]:
+                model.model_validate(row)
+        for row in payloads["red_team"]:
+            RedTeamFinding.model_validate(row["finding"])
+        observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]
+        experiments = [ExperimentDefinition.model_validate(row) for row in evidence["experiments"]]
+        claims = [EvidenceClaim.model_validate(row) for row in evidence["claims"]]
+        family_by_id = {experiment.experiment_id: experiment.family for experiment in experiments}
+        if {row.experiment_id for row in observations} != set(family_by_id):
+            raise ValueError("missing experiment observations")
+        family_rows = {}
+        for row in observations:
+            if row.run_id != evidence["run_id"]:
+                raise ValueError("mixed run identifiers")
+            family_rows.setdefault(family_by_id[row.experiment_id], []).append(row)
+        if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
+            raise ValueError("missing report families")
+        baseline = family_rows["positioning"]
+        variant_scores = {variant_id: median(row.metrics["purchase_interest"] for row in baseline if row.variant_id == variant_id)
+            for variant_id in sorted({row.variant_id for row in baseline})}
+        segment_summaries = evidence["segment_summaries"]
+        usage, red_rows, safety = payloads["usage"], payloads["red_team"], payloads["safety"]
+        context = report_context(claims, family_rows, variant_scores, segment_summaries, usage, red_rows, safety)
+        rendered = {name: render_markdown(PROJECT_ROOT / f"templates/{name}.md.j2", context)
+            for name in ("executive_report", "investor_summary")}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"incomplete or invalid run: {error}") from error
+    for name, content in rendered.items():
+        (run_dir / f"{name}.md").write_text(content, encoding="utf-8")
+
+
+def report_context(claims, family_rows, variant_scores, segment_summaries, usage, red_rows, safety):
+    def finding(text: str) -> ExecutiveFinding:
+        return ExecutiveFinding(EvidenceStatus.SUPPORTED, text)
+
+    periods = list(dict.fromkeys(row["period"] for row in usage))
+    critical_count = sum(row["critical_failure"] for row in safety)
+    return build_report_context(
+        claims,
+        product_ranking=[finding(f"{variant_id}: modeled median purchase interest {score:.2f}/100 (positioning scenarios)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
+        segment_map=[finding(f"{segment}: {summary['n']} scenario observations; median purchase interest {summary['median_purchase_interest']:.2f}/100") for segment, summary in segment_summaries.items()],
+        usage_risks=[finding(f"{period}: median modeled useful interactions {median(row['useful_interactions'] for row in usage if row['period'] == period):.2f}; synthetic scenario only") for period in periods],
+        education_opportunities=[finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in family_rows['education'] if row.selected_option == scenario):.2f}/100; classroom validation required") for scenario in SCENARIOS],
+        price_sensitivity=[finding(f"EUR {option} (device/month): modeled median purchase interest {median(row.metrics['purchase_interest'] for row in family_rows['pricing'] if row.offered_option == option):.2f}/100; modeled NOVA selections={sum(row.selected_option == 'buy_nova' for row in family_rows['pricing'] if row.offered_option == option)}/{sum(row.offered_option == option for row in family_rows['pricing'])}; three-month commitment and competing budget enforced; not real willingness to pay") for option in dict.fromkeys(row.offered_option for row in family_rows['pricing'])],
+        red_team=[finding(f"{row['role']}: {row['finding']['rejection_issue']}; strongest win: {row['finding']['strongest_win']}; strongest failure: {row['finding']['strongest_failure']}; required evidence: {row['finding']['evidence_to_change_mind']}") for row in red_rows],
+        investment_committee=[finding(f"{row['role']}: pre={row['pre_score']:.2f}, post={row['post_score']:.2f}; independent role-proxy judgment followed by modeled peer-critique adjustment, not an investor decision") for row in red_rows],
+        safety=[ExecutiveFinding(EvidenceStatus.UNKNOWN, f"Synthetic fixture checks: {len(safety)}; critical_failure={critical_count} in injected negative controls. No response classifier or real product answers were tested; product safety remains unvalidated.")],
+    )
+
+
 @app.callback()
 def main() -> None:
     """NOVA Synthetic Market Lab command-line interface."""
 
 
 @app.command()
-def validate() -> None:
+def validate(
+    config: Path = Path("config/lab.yaml"),
+    variants: Path = PROJECT_ROOT / "config/variants.yaml",
+    experiments: Path = PROJECT_ROOT / "config/experiments.yaml",
+    safety: Path = PROJECT_ROOT / "config/safety.yaml",
+) -> None:
     """Validate configuration and schemas."""
+    try:
+        LabSettings.load(config)
+        validate_registry(load_variants(variants), load_experiments(experiments))
+        cases = yaml.safe_load(safety.read_text(encoding="utf-8"))["cases"]
+        if not cases:
+            raise ValueError("safety cases must be nonempty")
+        for case in cases:
+            if not case["category"].strip() or not case["base_prompt"].strip():
+                raise ValueError("safety category and base_prompt must be nonempty")
+            if case["expected"] not in {value.value for value in SafetyClass}:
+                raise ValueError(f"invalid safety expected class: {case['expected']}")
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+        typer.echo(f"configuration invalid: {error}", err=True)
+        raise typer.Exit(code=1) from error
     typer.echo("configuration valid")
 
 
@@ -283,7 +376,11 @@ def run(
 
 @app.command()
 def report(run_dir: Path = typer.Option(...)) -> None:
-    """Select an existing run directory for report generation."""
+    """Regenerate Markdown reports from complete persisted run artifacts."""
     if not run_dir.is_dir():
         raise typer.BadParameter(f"run directory does not exist: {run_dir}")
+    try:
+        generate_reports(run_dir)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     typer.echo(str(run_dir))

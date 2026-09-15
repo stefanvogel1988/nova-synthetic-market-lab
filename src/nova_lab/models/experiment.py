@@ -18,4 +18,6 @@ class ExperimentObservation(BaseModel):
     metrics: dict[str, float]
     objections: list[str] = []
     selected_option: str | None = None
+    offered_option: str | None = None
+    blinded_variant_id: str | None = None
     rationale: str = ""
