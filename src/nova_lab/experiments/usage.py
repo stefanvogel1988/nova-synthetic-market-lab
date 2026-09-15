@@ -100,7 +100,13 @@ def simulate_usage(
                 snapshot.useful_interactions * min(1, len(useful) / len(final_states)), 2,
             )
             snapshot.frustration = round(mean(s.frustration for s in final_states.values()), 2)
-            snapshot.parent_interventions = sum(s.needs_parent for s in final_states.values())
+            # Count situations with explicit adult help, even if the child later
+            # lapses. ASR clarification alone does not request adult intervention.
+            snapshot.parent_interventions = len({
+                event.scenario_id for event in period_events
+                if event.kind in {"misunderstanding", "adult_bridge", "refusal"}
+                and event.state_after.needs_parent
+            })
             modes = Counter(event.mode for event in useful)
             snapshot.mode_mix = {mode: modes[mode] / max(1, len(useful)) for mode in ("music", "stories", "learning")}
             snapshot.event_ids = [event.event_id for event in period_events]

@@ -64,3 +64,29 @@ def test_lapsed_session_can_spontaneously_reengage_at_a_later_checkpoint():
     assert snapshots[3].useful_interactions == 0
     assert snapshots[4].session_state.mode == "engaged"
     assert snapshots[4].useful_interactions > 0
+
+
+def test_misunderstanding_then_lapse_preserves_required_parent_intervention():
+    # A later lapse must not erase an earlier explicit request for adult help.
+    from pathlib import Path
+
+    from nova_lab.child.events import DeterministicChildEngine
+    from nova_lab.experiments.registry import load_variants
+    from nova_lab.personas.factory import PersonaFactory
+
+    child = PersonaFactory(7).make_children(1)[0].model_copy(update={
+        "language_ability": 0.1, "attention_span": 0.1,
+    })
+    variant = load_variants(Path("config/variants.yaml"))["C"]
+    events = [event for event in DeterministicChildEngine().simulate(
+        child, variant, 7, run_id="regression", experiment_id="usage-v1",
+    ) if event.scenario_id == "weak_wifi"]
+    day_one = [event for event in events if event.period == "day_1"]
+    assert day_one[-3].kind == "misunderstanding"
+    assert day_one[-3].state_after.needs_parent is True
+    assert day_one[-1].kind == "lapse"
+    assert day_one[-1].state_after.needs_parent is False
+
+    snapshots = simulate_usage(child, variant, seed=7, events=events)
+
+    assert snapshots[0].parent_interventions == 1
