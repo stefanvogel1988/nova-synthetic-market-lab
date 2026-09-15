@@ -117,12 +117,13 @@ def validate_usage_events(events, usage, children, variants, experiment_variants
     for key, rows in by_session.items():
         _, child_id, variant_id = key
         for snapshot in simulate_usage(by_child[child_id], by_variant[variant_id], seed, events=rows):
-            expected[(*key, snapshot.period)] = snapshot.useful_interactions
+            expected[(*key, snapshot.period)] = snapshot.model_dump(mode="json")
     for snapshot in usage:
         key = tuple(snapshot[field] for field in ("experiment_id", "persona_id", "variant_id", "period"))
-        if snapshot["useful_interactions"] != expected[key]:
-            raise ValueError(
-                f"usage event summary mismatch: run={snapshot['run_id']} "
-                f"persona={snapshot['persona_id']} experiment={snapshot['experiment_id']} "
-                f"variant={snapshot['variant_id']} period={snapshot['period']} field=useful_interactions"
-            )
+        for field in ("useful_interactions", "session_state"):
+            if snapshot[field] != expected[key][field]:
+                raise ValueError(
+                    f"usage event summary mismatch: run={snapshot['run_id']} "
+                    f"persona={snapshot['persona_id']} experiment={snapshot['experiment_id']} "
+                    f"variant={snapshot['variant_id']} period={snapshot['period']} field={field}"
+                )

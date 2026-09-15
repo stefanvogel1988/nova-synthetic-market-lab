@@ -449,6 +449,68 @@ def test_report_rejects_usage_summaries_that_disagree_with_child_events(
     assert {name: (run_dir / name).read_bytes() for name in reports} == reports
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("mode", "lapsed"),
+    ("interest", 0.0),
+    ("frustration", 1.0),
+    ("needs_parent", True),
+])
+def test_report_rejects_tampered_usage_session_state_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, field, value
+):
+    # Trusting saved state can change reported lapse rates without changing events.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "usage.jsonl"
+    usage = read_jsonl(path)
+    assert usage[0]["session_state"][field] != value
+    usage[0]["session_state"][field] = value
+    path.write_text("\n".join(json.dumps(row) for row in usage) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "incomplete or invalid run" in outcome.output
+    assert "session_state" in outcome.output
+    assert usage[0]["run_id"] in outcome.output
+    assert usage[0]["persona_id"] in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+@pytest.mark.parametrize("removed_fields", [
+    ("experiment_id", "persona_id"),
+    ("experiment_id", "variant_id"),
+    ("experiment_id", "persona_id", "variant_id"),
+])
+def test_report_rejects_removed_usage_event_groups_with_adjusted_manifest(
+    tmp_path, completed_run_for_report_integrity, removed_fields
+):
+    # Matching surviving snapshots/events and revised counts cannot prove coverage.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    removed = read_jsonl(run_dir / "usage.jsonl")[0]
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    for artifact in ("usage", "child_events"):
+        path = run_dir / f"{artifact}.jsonl"
+        rows = read_jsonl(path)
+        remaining = [row for row in rows
+                     if not all(row[field] == removed[field] for field in removed_fields)]
+        assert 0 < len(remaining) < len(rows)
+        path.write_text("\n".join(json.dumps(row) for row in remaining) + "\n", encoding="utf-8")
+        evidence["artifact_counts"][artifact] = len(remaining)
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "incomplete or invalid run" in outcome.output
+    assert "coverage" in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
 @pytest.mark.parametrize("mutation", ["missing", "unknown", "duplicate", "incomplete", "invalid", "changed"])
 def test_report_rejects_missing_or_corrupt_usage_variant_provenance(
     tmp_path, completed_run_for_report_integrity, mutation

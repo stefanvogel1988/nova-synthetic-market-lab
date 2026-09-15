@@ -210,6 +210,13 @@ def validate_event_links(events, usage, child_ids, usage_variants):
         key = (event.experiment_id, event.persona_id, event.variant_id, event.period)
         groups[(*key, event.scenario_id)].append(event)
         by_snapshot[key].append(event)
+    expected_keys = {
+        (experiment_id, child_id, variant_id, period)
+        for experiment_id, variant_ids in usage_variants.items()
+        for child_id in child_ids for variant_id in variant_ids for period in PERIODS
+    }
+    if set(by_snapshot) != expected_keys:
+        raise ValueError("incomplete child event/usage coverage for persisted population and experiments")
     for rows in groups.values():
         if ([e.sequence for e in rows] != list(range(1, len(rows) + 1))
                 or any(a.state_after != b.state_before for a, b in zip(rows, rows[1:]))):
