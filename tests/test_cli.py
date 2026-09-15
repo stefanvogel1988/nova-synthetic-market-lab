@@ -417,6 +417,7 @@ def test_report_regenerates_from_saved_artifacts_without_simulation(tmp_path, mo
 
 
 @pytest.mark.parametrize(("field", "value"), [
+    ("useful_interactions", 9000),
     ("abandonment_reasons", {"invented_reason": 9000}),
     ("parent_interventions", 9000),
     ("frustration", 1.0),
@@ -445,6 +446,63 @@ def test_report_rejects_usage_summaries_that_disagree_with_child_events(
     assert usage[0]["run_id"] in outcome.output
     assert usage[0]["persona_id"] in outcome.output
     assert field in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "duplicate", "incomplete", "invalid", "changed"])
+def test_report_rejects_missing_or_corrupt_usage_variant_provenance(
+    tmp_path, completed_run_for_report_integrity, mutation
+):
+    # Missing provenance or changed variant inputs must not bless persisted usage.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "evidence.json"
+    evidence = json.loads(path.read_text())
+    variants = evidence["usage_variants"]
+    if mutation == "missing":
+        del evidence["usage_variants"]
+    elif mutation == "unknown":
+        variants[0]["variant_id"] = "unknown"
+    elif mutation == "duplicate":
+        variants.append(dict(variants[0]))
+    elif mutation == "incomplete":
+        variants.pop()
+    elif mutation == "invalid":
+        variants[0]["curiosity_mode"] = "invalid"
+    else:
+        variants[0]["curiosity_mode"] = not variants[0]["curiosity_mode"]
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "incomplete or invalid run" in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_reconciles_usage_with_saved_variant_inputs(
+    tmp_path, completed_run_for_report_integrity, monkeypatch
+):
+    # Re-reading current feature flags must not alter validation of a completed run.
+    from nova_lab import cli
+
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    project = tmp_path / "project"
+    shutil.copytree(cli.PROJECT_ROOT / "config", project / "config")
+    shutil.copytree(cli.PROJECT_ROOT / "templates", project / "templates")
+    path = project / "config/variants.yaml"
+    config = yaml.safe_load(path.read_text())
+    for variant in config["variants"]:
+        variant["curiosity_mode"] = not variant["curiosity_mode"]
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    monkeypatch.setattr(cli, "PROJECT_ROOT", project)
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code == 0, outcome.output
     assert {name: (run_dir / name).read_bytes() for name in reports} == reports
 
 
@@ -535,7 +593,7 @@ def test_report_labels_lapse_to_reengagement_as_checkpoint_state(tmp_path):
     from nova_lab.settings import LabSettings
 
     result = run_pipeline(
-        7,
+        4,
         tmp_path,
         settings=LabSettings(parent_count=2, child_count=2, education_count=2),
     )
@@ -552,13 +610,11 @@ def test_report_labels_lapse_to_reengagement_as_checkpoint_state(tmp_path):
         if (row["persona_id"], row["variant_id"], row["period"])
         == (persona_id, variant_id, "week_4")
     )
-    week_2["session_state"]["mode"] = "lapsed"
-    week_2["useful_interactions"] = 0
-    week_4["session_state"]["mode"] = "engaged"
-    week_4["useful_interactions"] = 1
-    usage_path.write_text(
-        "\n".join(json.dumps(row) for row in usage) + "\n", encoding="utf-8"
-    )
+    # Seed 4 naturally lapses and reengages; persisted usage stays consistent.
+    assert week_2["session_state"]["mode"] == "lapsed"
+    assert week_2["useful_interactions"] == 0
+    assert week_4["session_state"]["mode"] == "engaged"
+    assert week_4["useful_interactions"] > 0
 
     outcome = CliRunner().invoke(app, ["report", "--run-dir", str(result.run_dir)])
     report = (result.run_dir / "executive_report.md").read_text(encoding="utf-8")

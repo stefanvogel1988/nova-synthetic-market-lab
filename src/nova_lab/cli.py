@@ -9,7 +9,7 @@ import typer
 import yaml
 
 from nova_lab.child.events import (
-    ChildInteractionEngine, ChildInteractionEvent, DeterministicChildEngine, validate_event_links,
+    ChildInteractionEngine, ChildInteractionEvent, DeterministicChildEngine,
 )
 from nova_lab.evidence.register import EvidenceRegister
 from nova_lab.experiments.education import SCENARIOS, evaluate_education_scenario
@@ -22,12 +22,13 @@ from nova_lab.experiments.privacy import run_privacy
 from nova_lab.experiments.red_team import assess_independently, peer_critiques, validate_red_team_records
 from nova_lab.experiments.registry import load_experiments, load_variants, validate_registry
 from nova_lab.experiments.runner import ExperimentRunner
-from nova_lab.experiments.usage import UsageSnapshot, simulate_usage
+from nova_lab.experiments.usage import UsageSnapshot, simulate_usage, validate_usage_events
 from nova_lab.experiments.validation import validate_observations
 from nova_lab.models.common import EvidenceStatus, SafetyClass
 from nova_lab.models.experiment import ExperimentDefinition, ExperimentObservation
 from nova_lab.models.evidence import EvidenceClaim
 from nova_lab.models.persona import ParentPersona, ChildPersona, EducationPersona, RedTeamPersona
+from nova_lab.models.product import ProductVariant
 from nova_lab.personas.factory import PersonaFactory
 from nova_lab.providers.base import JudgeEngine
 from nova_lab.providers.deterministic import DeterministicEngine
@@ -231,6 +232,10 @@ def run_pipeline(
     evidence_path.write_text(json.dumps({
         "run_id": run_id, "seed": seed,
         "experiments": [experiment.model_dump(mode="json") for experiment in experiments],
+        "usage_variants": [variants[variant_id].model_dump(mode="json") for variant_id in sorted({
+            variant_id for experiment in experiments if experiment.family == "usage"
+            for variant_id in experiment.variant_ids
+        })],
         "artifact_counts": {
             "parents": len(parents), "children": len(children), "education": len(education),
             "observations": len(observations), "usage": len(usage), "red_team": len(red_rows),
@@ -322,10 +327,12 @@ def generate_reports(run_dir: Path) -> None:
             education=[EducationPersona.model_validate(row) for row in payloads["education"]],
         )
         if "child_events" in payloads:
-            validate_event_links(
+            validate_usage_events(
                 [ChildInteractionEvent.model_validate(row) for row in payloads["child_events"]],
-                payloads["usage"], {row["persona_id"] for row in payloads["children"]},
+                payloads["usage"], [ChildPersona.model_validate(row) for row in payloads["children"]],
+                [ProductVariant.model_validate(row) for row in evidence["usage_variants"]],
                 {e.experiment_id: e.variant_ids for e in experiments if e.family == "usage"},
+                evidence["seed"],
             )
         claims = [EvidenceClaim.model_validate(row) for row in evidence["claims"]]
         family_by_id = {experiment.experiment_id: experiment.family for experiment in experiments}

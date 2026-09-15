@@ -1,10 +1,11 @@
 """Synthetic 30-day usage scenarios; these are not claims about real children."""
 
+from collections import defaultdict
 import random
 
 from pydantic import BaseModel, Field
 
-from nova_lab.child.events import ChildInteractionEvent, summarize_usage_events
+from nova_lab.child.events import ChildInteractionEvent, summarize_usage_events, validate_event_links
 from nova_lab.child.simulator import (
     ChildSessionState,
     lapse_session,
@@ -99,3 +100,29 @@ def simulate_usage(
             for field, value in aggregates.items():
                 setattr(snapshot, field, value)
     return snapshots
+
+
+def validate_usage_events(events, usage, children, variants, experiment_variants, seed):
+    """Reconcile saved usage with events and the completed run's model inputs."""
+    by_variant = {variant.variant_id: variant for variant in variants}
+    required_variants = {variant_id for ids in experiment_variants.values() for variant_id in ids}
+    if len(by_variant) != len(variants) or set(by_variant) != required_variants:
+        raise ValueError("usage variant provenance does not match persisted experiments")
+    by_child = {child.persona_id: child for child in children}
+    validate_event_links(events, usage, set(by_child), experiment_variants)
+    by_session = defaultdict(list)
+    for event in events:
+        by_session[(event.experiment_id, event.persona_id, event.variant_id)].append(event)
+    expected = {}
+    for key, rows in by_session.items():
+        _, child_id, variant_id = key
+        for snapshot in simulate_usage(by_child[child_id], by_variant[variant_id], seed, events=rows):
+            expected[(*key, snapshot.period)] = snapshot.useful_interactions
+    for snapshot in usage:
+        key = tuple(snapshot[field] for field in ("experiment_id", "persona_id", "variant_id", "period"))
+        if snapshot["useful_interactions"] != expected[key]:
+            raise ValueError(
+                f"usage event summary mismatch: run={snapshot['run_id']} "
+                f"persona={snapshot['persona_id']} experiment={snapshot['experiment_id']} "
+                f"variant={snapshot['variant_id']} period={snapshot['period']} field=useful_interactions"
+            )
