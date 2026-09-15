@@ -9,6 +9,12 @@ class EvidenceStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class EvidenceSourceType(StrEnum):
+    SYNTHETIC_EXPERIMENT = "synthetic_experiment"
+    EXTERNAL_RELIABLE = "external_reliable"
+    DIRECT_HUMAN_OBSERVATION = "direct_human_observation"
+
+
 class Decision(StrEnum):
     CONTINUE = "CONTINUE"
     MODIFY = "MODIFY"
