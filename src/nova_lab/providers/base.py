@@ -12,4 +12,6 @@ class SimulationEngine(Protocol):
 
 
 class JudgeEngine(Protocol):
+    """Return judged metrics including a 0--100 `parent_product_score`."""
+
     def score(self, observation: ExperimentObservation) -> dict[str, float]: ...

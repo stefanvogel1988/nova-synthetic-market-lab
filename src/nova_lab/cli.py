@@ -24,13 +24,15 @@ from nova_lab.models.experiment import ExperimentDefinition, ExperimentObservati
 from nova_lab.models.evidence import EvidenceClaim
 from nova_lab.models.persona import ParentPersona, ChildPersona, EducationPersona, RedTeamPersona
 from nova_lab.personas.factory import PersonaFactory
+from nova_lab.providers.base import JudgeEngine
 from nova_lab.providers.deterministic import DeterministicEngine
+from nova_lab.providers.judge import RubricJudge
 from nova_lab.reporting.context import ExecutiveFinding, build_report_context
 from nova_lab.reporting.markdown import render_markdown
 from nova_lab.safety.evaluator import SafetyResult, evaluate_safety
 from nova_lab.safety.generator import expand_prompt
 from nova_lab.scoring.aggregate import summarize_by_segment
-from nova_lab.scoring.bias import apply_positivity_penalty
+from nova_lab.scoring.bias import apply_positivity_penalty, detect_preference_decision_contradiction
 from nova_lab.settings import LabSettings
 from nova_lab.storage.jsonl import append_jsonl, read_jsonl
 
@@ -51,7 +53,8 @@ class PipelineResult:
 
 
 def run_pipeline(
-    seed: int, output_dir: Path, *, settings: LabSettings | None = None
+    seed: int, output_dir: Path, *, settings: LabSettings | None = None,
+    judge: JudgeEngine | None = None,
 ) -> PipelineResult:
     """Compose a local synthetic V1 run; no human or product evidence is created."""
     settings = (settings or LabSettings()).model_copy(
@@ -74,6 +77,7 @@ def run_pipeline(
         append_jsonl(run_dir / f"{name}.jsonl", [persona.model_dump(mode="json") for persona in personas])
 
     runner = ExperimentRunner(DeterministicEngine(seed), seed)
+    judge = judge if judge is not None else RubricJudge()
     parent_families = {
         "positioning": run_positioning, "pricing": run_pricing,
         "privacy": run_privacy, "learning": run_learning,
@@ -122,6 +126,21 @@ def run_pipeline(
         else:
             raise ValueError(f"Unsupported experiment family: {experiment.family}")
         rows = [row.model_copy(update={"run_id": run_id}) for row in rows]
+        if experiment.family in parent_families:
+            judged_rows = []
+            for row in rows:
+                # Pricing has now finalized an explicit choice. Scenario labels
+                # in other families are not purchase rejections.
+                if "selected_nova" in row.metrics and detect_preference_decision_contradiction(
+                    row.metrics["purchase_interest"], bool(row.metrics["selected_nova"])
+                ):
+                    row = row.model_copy(update={"objections": sorted({
+                        *row.objections, "preference_decision_contradiction",
+                    })})
+                judged_rows.append(row.model_copy(update={
+                    "metrics": {**row.metrics, **judge.score(row)},
+                }))
+            rows = judged_rows
         experiment_rows[experiment.experiment_id] = rows
         family_rows.setdefault(experiment.family, []).extend(rows)
         observations.extend(rows)
@@ -281,7 +300,12 @@ def generate_reports(run_dir: Path) -> None:
         if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
             raise ValueError("missing report families")
         baseline = family_rows["positioning"]
-        variant_scores = {variant_id: median(row.metrics["purchase_interest"] for row in baseline if row.variant_id == variant_id)
+        # Older V1 artifacts have no judged metric; the local rubric can score
+        # them during report reconstruction without changing persisted inputs.
+        variant_scores = {variant_id: median(
+            row.metrics["parent_product_score"] if "parent_product_score" in row.metrics
+            else RubricJudge().score(row)["parent_product_score"]
+            for row in baseline if row.variant_id == variant_id)
             for variant_id in sorted({row.variant_id for row in baseline})}
         segment_summaries = evidence["segment_summaries"]
         usage, red_rows, safety = payloads["usage"], payloads["red_team"], payloads["safety"]
@@ -302,7 +326,7 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
     critical_count = sum(row["critical_failure"] for row in safety)
     return build_report_context(
         claims,
-        product_ranking=[finding(f"{variant_id}: modeled median purchase interest {score:.2f}/100 (positioning scenarios)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
+        product_ranking=[finding(f"{variant_id}: modeled median judged parent/product score {score:.2f}/100 (positioning scenarios; synthetic rubric judgment, not demand)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
         segment_map=[finding(f"{segment}: {summary['n']} scenario observations; median purchase interest {summary['median_purchase_interest']:.2f}/100") for segment, summary in segment_summaries.items()],
         usage_risks=[finding(f"{period}: median modeled useful interactions {median(row['useful_interactions'] for row in usage if row['period'] == period):.2f}; synthetic scenario only") for period in periods],
         education_opportunities=[finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in family_rows['education'] if row.selected_option == scenario):.2f}/100; classroom validation required") for scenario in SCENARIOS],
