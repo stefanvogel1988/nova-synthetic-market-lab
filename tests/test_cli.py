@@ -921,3 +921,52 @@ def test_same_family_experiments_keep_separate_evidence_and_paired_comparisons(t
     assert "paired" in claims["learning-v1"]["claim_text"].lower()
     assert "delta" in claims["privacy-v1"]["claim_text"].lower()
     assert "unfavorable" in claims["learning-v1"]["claim_text"].lower()
+
+
+@pytest.mark.parametrize("mutation", ["proven", "direct_human_source"])
+def test_report_rejects_tampered_synthetic_evidence_claims_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, mutation
+):
+    """A Pydantic-valid claim must still be derived from this synthetic run."""
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    claim = evidence["claims"][0]
+    if mutation == "proven":
+        claim["current_status"] = "PROVEN"
+        claim["supporting_evidence"].append({
+            "source_type": "direct_human_observation", "source_id": "forged-interview",
+            "description": "Forged provenance.",
+        })
+    else:
+        claim["supporting_evidence"].append({
+            "source_type": "direct_human_observation", "source_id": "forged-interview",
+            "description": "Forged provenance.",
+        })
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "evidence claim" in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_rejects_tampered_segment_summaries_before_rewriting(
+    tmp_path, completed_run_for_report_integrity
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["segment_summaries"]["enthusiastic"]["median_purchase_interest"] = 100.0
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "segment summaries" in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports

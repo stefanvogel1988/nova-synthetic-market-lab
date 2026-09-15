@@ -216,18 +216,7 @@ def run_pipeline(
                 })
     append_jsonl(run_dir / "safety.jsonl", safety)
 
-    register = EvidenceRegister()
-    for experiment in experiments:
-        rows = experiment_rows[experiment.experiment_id]
-        metric = {"usage": "useful_interactions", "education": "usefulness"}.get(experiment.family, "purchase_interest")
-        value = median(row.metrics[metric] for row in rows)
-        text = f"{experiment.family}: {len(rows)} synthetic scenarios; median {metric}={value:.2f}. This describes model output, not hypothesis confirmation."
-        text += paired_comparisons(experiment.family, rows)
-        register.add_claim(experiment.experiment_id, text, experiment.family)
-        register.record_synthetic_support(experiment.experiment_id, experiment.experiment_id, text)
-        for objection in sorted({objection for row in rows for objection in row.objections}):
-            register.record_contestation(experiment.experiment_id, objection)
-    claims = register.all()
+    claims = build_evidence_claims(experiments, experiment_rows)
     evidence_path = run_dir / "evidence.json"
     evidence_path.write_text(json.dumps({
         "run_id": run_id, "seed": seed,
@@ -279,6 +268,37 @@ def paired_comparisons(family: str, rows: list[ExperimentObservation]) -> str:
         unfavorable = sum(b.metrics["purchase_interest"] < a.metrics["purchase_interest"] for a, b in pairs)
         summaries.append(f"{option} vs {options[0]}: {len(pairs)} paired comparisons, {deltas}; unfavorable purchase-interest outcomes={unfavorable}/{len(pairs)}")
     return " ASSUMPTION-driven paired comparisons: " + "; ".join(summaries) + ". Uncalibrated rules; human validation required."
+
+
+def _canonical_evidence_rows(rows: list[ExperimentObservation]) -> list[ExperimentObservation]:
+    """Give persisted-order-independent evidence claims a reproducible input order."""
+    return sorted(rows, key=lambda row: (
+        row.persona_id, row.variant_id, row.selected_option or "", row.offered_option or "",
+        json.dumps(row.metrics, sort_keys=True), row.rationale,
+    ))
+
+
+def build_evidence_claims(
+    experiments: list[ExperimentDefinition], experiment_rows: dict[str, list[ExperimentObservation]],
+) -> list[EvidenceClaim]:
+    """Derive the only evidence claims allowed for a completed synthetic run."""
+    register = EvidenceRegister()
+    for experiment in experiments:
+        rows = _canonical_evidence_rows(experiment_rows[experiment.experiment_id])
+        metric = {"usage": "useful_interactions", "education": "usefulness"}.get(
+            experiment.family, "purchase_interest"
+        )
+        value = median(row.metrics[metric] for row in rows)
+        text = (
+            f"{experiment.family}: {len(rows)} synthetic scenarios; median {metric}={value:.2f}. "
+            "This describes model output, not hypothesis confirmation."
+        )
+        text += paired_comparisons(experiment.family, rows)
+        register.add_claim(experiment.experiment_id, text, experiment.family)
+        register.record_synthetic_support(experiment.experiment_id, experiment.experiment_id, text)
+        for objection in sorted({objection for row in rows for objection in row.objections}):
+            register.record_contestation(experiment.experiment_id, objection)
+    return register.all()
 
 
 def generate_reports(run_dir: Path) -> None:
@@ -350,11 +370,30 @@ def generate_reports(run_dir: Path) -> None:
         if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
             raise ValueError("missing report families")
         baseline = family_rows["positioning"]
+        expected_claims = build_evidence_claims(experiments, {
+            experiment.experiment_id: [
+                row for row in observations if row.experiment_id == experiment.experiment_id
+            ]
+            for experiment in experiments
+        })
+        if [claim.model_dump(mode="json") for claim in claims] != [
+            claim.model_dump(mode="json") for claim in expected_claims
+        ]:
+            raise ValueError("evidence claims disagree with validated observations")
+        expected_segment_summaries = summarize_by_segment(
+            baseline,
+            {
+                parent.persona_id: parent.ai_attitude
+                for parent in (ParentPersona.model_validate(row) for row in payloads["parents"])
+            },
+        )
+        segment_summaries = evidence["segment_summaries"]
+        if segment_summaries != expected_segment_summaries:
+            raise ValueError("segment summaries disagree with validated positioning observations")
         variant_scores = {variant_id: median(
             row.metrics["parent_product_score"]
             for row in baseline if row.variant_id == variant_id)
             for variant_id in sorted({row.variant_id for row in baseline})}
-        segment_summaries = evidence["segment_summaries"]
         usage, red_rows, safety = payloads["usage"], payloads["red_team"], payloads["safety"]
         context = report_context(claims, family_rows, variant_scores, segment_summaries, usage, red_rows, safety)
         rendered = {name: render_markdown(PROJECT_ROOT / f"templates/{name}.md.j2", context)
