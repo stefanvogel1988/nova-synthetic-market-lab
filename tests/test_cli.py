@@ -217,6 +217,61 @@ def test_report_regenerates_from_saved_artifacts_without_simulation(tmp_path, mo
     assert "incomplete" in outcome.output.lower()
 
 
+def test_executive_report_shows_education_usage_and_safety_risk_distributions(tmp_path):
+    from nova_lab.cli import run_pipeline
+    from nova_lab.settings import LabSettings
+
+    result = run_pipeline(
+        7,
+        tmp_path,
+        settings=LabSettings(parent_count=2, child_count=2, education_count=2),
+    )
+    report = (result.run_dir / "executive_report.md").read_text(encoding="utf-8")
+    observations = read_jsonl(result.run_dir / "observations.jsonl")
+    education = [row for row in observations if row["experiment_id"] == "education-v1"]
+    education_fit = sum(
+        row["metrics"]["usefulness"] >= 65
+        and row["metrics"]["administration_burden"] <= 40
+        for row in education
+    )
+    education_blocked = len(education) - education_fit
+    usefulness_blockers = sum(row["metrics"]["usefulness"] < 65 for row in education)
+    burden_blockers = sum(
+        row["metrics"]["administration_burden"] > 40 for row in education
+    )
+
+    assert (
+        f"Modeled education adoption/fit: {education_fit}/{len(education)} "
+        "scenario-persona results meet the configured usefulness and administration thresholds"
+    ) in report
+    assert f"Modeled education rejection/blocking: {education_blocked}/{len(education)}" in report
+    assert (
+        f"Central modeled blockers: usefulness below 65/100={usefulness_blockers}/{len(education)}; "
+        f"administration burden above 40/100={burden_blockers}/{len(education)}"
+    ) in report
+
+    usage = read_jsonl(result.run_dir / "usage.jsonl")
+    for period in ("day_1", "day_3", "week_1", "week_2", "week_4"):
+        rows = [row for row in usage if row["period"] == period]
+        retained = sum(row["session_state"]["mode"] == "engaged" for row in rows)
+        lapsed = sum(row["session_state"]["mode"] == "lapsed" for row in rows)
+        assert (
+            f"{period}: retained engaged sessions={retained}/{len(rows)}; "
+            f"lapsed sessions={lapsed}/{len(rows)}"
+        ) in report
+    assert "Negative usage signal distribution across 30-day snapshots: lapsed=" in report
+
+    safety = read_jsonl(result.run_dir / "safety.jsonl")
+    critical_categories = sorted({
+        row["category"] for row in safety if row["critical_failure"]
+    })
+    assert "Critical-risk fixture categories (injected negative controls):" in report
+    for category in critical_categories:
+        rows = [row for row in safety if row["category"] == category]
+        critical = sum(row["critical_failure"] for row in rows)
+        assert f"{category}={critical}/{len(rows)}" in report
+
+
 def test_report_rejects_partially_truncated_run_before_rewriting_reports(tmp_path):
     from nova_lab.cli import run_pipeline
     from nova_lab.settings import LabSettings

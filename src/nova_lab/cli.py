@@ -324,16 +324,77 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
 
     periods = list(dict.fromkeys(row["period"] for row in usage))
     critical_count = sum(row["critical_failure"] for row in safety)
+    education_rows = family_rows["education"]
+    education_fit = sum(
+        row.metrics["usefulness"] >= 65
+        and row.metrics["administration_burden"] <= 40
+        for row in education_rows
+    )
+    usefulness_blockers = sum(
+        row.metrics["usefulness"] < 65 for row in education_rows
+    )
+    burden_blockers = sum(
+        row.metrics["administration_burden"] > 40 for row in education_rows
+    )
+    privacy_fits = [row.metrics["privacy_procurement_fit"] for row in education_rows]
+    critical_categories = [
+        f"{category}={sum(row['critical_failure'] for row in rows)}/{len(rows)}"
+        for category in sorted({row["category"] for row in safety if row["critical_failure"]})
+        for rows in [[row for row in safety if row["category"] == category]]
+    ]
     return build_report_context(
         claims,
         product_ranking=[finding(f"{variant_id}: modeled median judged parent/product score {score:.2f}/100 (positioning scenarios; synthetic rubric judgment, not demand)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
         segment_map=[finding(f"{segment}: {summary['n']} scenario observations; median purchase interest {summary['median_purchase_interest']:.2f}/100") for segment, summary in segment_summaries.items()],
-        usage_risks=[finding(f"{period}: median modeled useful interactions {median(row['useful_interactions'] for row in usage if row['period'] == period):.2f}; synthetic scenario only") for period in periods],
-        education_opportunities=[finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in family_rows['education'] if row.selected_option == scenario):.2f}/100; classroom validation required") for scenario in SCENARIOS],
+        usage_risks=[
+            *[
+                finding(
+                    f"{period}: retained engaged sessions="
+                    f"{sum(row['session_state']['mode'] == 'engaged' for row in rows)}/{len(rows)}; "
+                    f"lapsed sessions={sum(row['session_state']['mode'] == 'lapsed' for row in rows)}/{len(rows)}; "
+                    f"median modeled useful interactions={median(row['useful_interactions'] for row in rows):.2f}; "
+                    "synthetic scenario only"
+                )
+                for period in periods
+                for rows in [[row for row in usage if row["period"] == period]]
+            ],
+            finding(
+                "Negative usage signal distribution across 30-day snapshots: "
+                f"lapsed={sum(row['session_state']['mode'] == 'lapsed' for row in usage)}/{len(usage)}; "
+                f"zero-use={sum(row['useful_interactions'] == 0 for row in usage)}/{len(usage)}. "
+                "These are modeled session states, not observed child retention."
+            ),
+        ],
+        education_opportunities=[
+            finding(
+                f"Modeled education adoption/fit: {education_fit}/{len(education_rows)} "
+                "scenario-persona results meet the configured usefulness and administration thresholds; "
+                "this is a synthetic fit screen, not adoption evidence."
+            ),
+            finding(
+                f"Modeled education rejection/blocking: {len(education_rows) - education_fit}/{len(education_rows)} "
+                "scenario-persona results fail at least one configured fit threshold; "
+                "this is not observed institutional rejection."
+            ),
+            finding(
+                f"Central modeled blockers: usefulness below 65/100={usefulness_blockers}/{len(education_rows)}; "
+                f"administration burden above 40/100={burden_blockers}/{len(education_rows)}. "
+                f"Privacy/procurement fit distribution: min={min(privacy_fits):.2f}/100, "
+                f"median={median(privacy_fits):.2f}/100, max={max(privacy_fits):.2f}/100; "
+                "classroom validation required."
+            ),
+            *[
+                finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in education_rows if row.selected_option == scenario):.2f}/100; classroom validation required")
+                for scenario in SCENARIOS
+            ],
+        ],
         price_sensitivity=[finding(f"EUR {option} (device/month): modeled median purchase interest {median(row.metrics['purchase_interest'] for row in family_rows['pricing'] if row.offered_option == option):.2f}/100; modeled NOVA selections={sum(row.selected_option == 'buy_nova' for row in family_rows['pricing'] if row.offered_option == option)}/{sum(row.offered_option == option for row in family_rows['pricing'])}; three-month commitment and competing budget enforced; not real willingness to pay") for option in dict.fromkeys(row.offered_option for row in family_rows['pricing'])],
         red_team=[finding(f"{row['role']}: {row['finding']['rejection_issue']}; strongest win: {row['finding']['strongest_win']}; strongest failure: {row['finding']['strongest_failure']}; required evidence: {row['finding']['evidence_to_change_mind']}") for row in red_rows],
         investment_committee=[finding(f"{row['role']}: pre={row['pre_score']:.2f}, post={row['post_score']:.2f}; independent role-proxy judgment followed by modeled peer-critique adjustment, not an investor decision") for row in red_rows],
-        safety=[ExecutiveFinding(EvidenceStatus.UNKNOWN, f"Synthetic fixture checks: {len(safety)}; critical_failure={critical_count} in injected negative controls. No response classifier or real product answers were tested; product safety remains unvalidated.")],
+        safety=[
+            ExecutiveFinding(EvidenceStatus.UNKNOWN, f"Synthetic fixture checks: {len(safety)}; critical_failure={critical_count} in injected negative controls. No response classifier or real product answers were tested; product safety remains unvalidated."),
+            ExecutiveFinding(EvidenceStatus.UNKNOWN, "Critical-risk fixture categories (injected negative controls): " + ", ".join(critical_categories) + ". These fixtures do not test product responses."),
+        ],
     )
 
 
