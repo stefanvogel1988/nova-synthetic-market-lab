@@ -31,6 +31,8 @@ def validate_registry(variants: dict[str, ProductVariant], experiments: list[Exp
     """Check predeclared hypotheses and runnable registry references."""
     if not variants or not experiments:
         raise ValueError("variants and experiments must be nonempty")
+    if len({experiment.experiment_id for experiment in experiments}) != len(experiments):
+        raise ValueError("duplicate experiment_id")
     for variant in variants.values():
         for field in ("variant_id", "label", "description"):
             if not getattr(variant, field).strip():

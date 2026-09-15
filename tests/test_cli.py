@@ -46,6 +46,115 @@ def copied_completed_run(source: Path, destination: Path) -> Path:
     return run_dir
 
 
+@pytest.mark.parametrize(("mutation", "message"), [
+    ("foreign_persona", "persona"),
+    ("wrong_population", "persona"),
+    ("unknown_experiment", "experiment"),
+    ("unknown_variant", "variant"),
+    ("wrong_experiment_variant", "variant"),
+    ("invalid_positioning_option", "option"),
+    ("invalid_privacy_option", "option"),
+    ("invalid_learning_option", "option"),
+    ("invalid_usage_option", "option"),
+    ("invalid_education_option", "option"),
+    ("invalid_pricing_offer", "option"),
+    ("invalid_pricing_choice", "choice"),
+    ("wrong_parent_pricing_choice", "choice"),
+    ("unexpected_offer", "option"),
+    ("duplicate", "duplicate"),
+    ("duplicate_pricing_offer_with_different_choice", "duplicate"),
+    ("missing", "missing"),
+    ("extra", "persona"),
+    ("wrong_run", "run"),
+    ("invalid_registry_variant", "variant"),
+    ("duplicate_registry_experiment", "duplicate"),
+])
+def test_report_rejects_invalid_observation_sets_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, mutation, message
+):
+    # Checking counts alone misses substitutions and truncation with updated metadata.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "observations.jsonl"
+    rows = read_jsonl(path)
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+    target = rows[0]
+    if mutation == "foreign_persona":
+        target["persona_id"] = "foreign-parent"
+    elif mutation == "wrong_population":
+        target["persona_id"] = read_jsonl(run_dir / "children.jsonl")[0]["persona_id"]
+    elif mutation == "unknown_experiment":
+        target["experiment_id"] = "foreign-experiment"
+    elif mutation == "unknown_variant":
+        target["variant_id"] = "foreign-variant"
+    elif mutation == "wrong_experiment_variant":
+        next(row for row in rows if row["experiment_id"] == "pricing-v1")["variant_id"] = "A"
+    elif mutation.startswith("invalid_") and mutation.endswith("_option"):
+        family = mutation.removeprefix("invalid_").removesuffix("_option")
+        next(row for row in rows if row["experiment_id"] == f"{family}-v1")["selected_option"] = "foreign-option"
+    elif mutation in {"invalid_pricing_offer", "invalid_pricing_choice", "wrong_parent_pricing_choice"}:
+        target = next(row for row in rows if row["experiment_id"] == "pricing-v1")
+        if mutation == "invalid_pricing_offer":
+            target["offered_option"] = "999/999"
+        elif mutation == "invalid_pricing_choice":
+            target["selected_option"] = "foreign-choice"
+        else:
+            parent = next(row for row in read_jsonl(run_dir / "parents.jsonl")
+                          if row["persona_id"] == target["persona_id"])
+            target["selected_option"] = "defer" if parent["existing_devices"] else "competing_purchase"
+    elif mutation == "unexpected_offer":
+        target["offered_option"] = "149/0"
+    elif mutation == "duplicate":
+        rows[1] = dict(rows[0])
+    elif mutation == "duplicate_pricing_offer_with_different_choice":
+        target = next(row for row in rows if row["experiment_id"] == "pricing-v1")
+        parent = next(row for row in read_jsonl(run_dir / "parents.jsonl")
+                      if row["persona_id"] == target["persona_id"])
+        other_choice = "buy_nova" if target["selected_option"] != "buy_nova" else (
+            "competing_purchase" if parent["existing_devices"] else "defer"
+        )
+        rows.append({**target, "selected_option": other_choice})
+    elif mutation == "missing":
+        rows.pop(0)
+    elif mutation == "extra":
+        rows.append({**target, "persona_id": "extra-parent"})
+    elif mutation == "wrong_run":
+        target["run_id"] = "foreign-run"
+    elif mutation == "invalid_registry_variant":
+        evidence["experiments"][0]["variant_ids"].append("foreign-variant")
+    elif mutation == "duplicate_registry_experiment":
+        evidence["experiments"].append(dict(evidence["experiments"][0]))
+    else:
+        raise AssertionError(f"unhandled mutation: {mutation}")
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    evidence["artifact_counts"]["observations"] = len(rows)
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0, "invalid observation set was accepted"
+    assert "incomplete or invalid run" in outcome.output.lower()
+    assert message in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_accepts_complete_observation_set_in_any_order(
+    tmp_path, completed_run_for_report_integrity
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "observations.jsonl"
+    rows = read_jsonl(path)
+    path.write_text("\n".join(json.dumps(row) for row in reversed(rows)) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code == 0, outcome.output
+    assert path.read_bytes() == before
+
+
 def test_validate_command_succeeds():
     result = CliRunner().invoke(app, ["validate"])
 

@@ -23,6 +23,7 @@ from nova_lab.experiments.red_team import RedTeamFinding, assess_independently, 
 from nova_lab.experiments.registry import load_experiments, load_variants, validate_registry
 from nova_lab.experiments.runner import ExperimentRunner
 from nova_lab.experiments.usage import UsageSnapshot, simulate_usage
+from nova_lab.experiments.validation import validate_observations
 from nova_lab.models.common import EvidenceStatus, SafetyClass
 from nova_lab.models.experiment import ExperimentDefinition, ExperimentObservation
 from nova_lab.models.evidence import EvidenceClaim
@@ -310,6 +311,13 @@ def generate_reports(run_dir: Path) -> None:
             RedTeamFinding.model_validate(row["finding"])
         observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]
         experiments = [ExperimentDefinition.model_validate(row) for row in evidence["experiments"]]
+        validate_observations(
+            observations, run_id=evidence_run_id, experiments=experiments,
+            variants=load_variants(PROJECT_ROOT / "config/variants.yaml"),
+            parents=[ParentPersona.model_validate(row) for row in payloads["parents"]],
+            children=[ChildPersona.model_validate(row) for row in payloads["children"]],
+            education=[EducationPersona.model_validate(row) for row in payloads["education"]],
+        )
         if "child_events" in payloads:
             validate_event_links(
                 [ChildInteractionEvent.model_validate(row) for row in payloads["child_events"]],
@@ -318,12 +326,8 @@ def generate_reports(run_dir: Path) -> None:
             )
         claims = [EvidenceClaim.model_validate(row) for row in evidence["claims"]]
         family_by_id = {experiment.experiment_id: experiment.family for experiment in experiments}
-        if {row.experiment_id for row in observations} != set(family_by_id):
-            raise ValueError("missing experiment observations")
         family_rows = {}
         for row in observations:
-            if row.run_id != evidence["run_id"]:
-                raise ValueError("mixed run identifiers")
             family_rows.setdefault(family_by_id[row.experiment_id], []).append(row)
         if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
             raise ValueError("missing report families")

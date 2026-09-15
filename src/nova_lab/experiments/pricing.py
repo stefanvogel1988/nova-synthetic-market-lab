@@ -26,6 +26,16 @@ def pricing_contexts() -> list[dict[str, float | int]]:
     ]
 
 
+def pricing_option(context: dict[str, float | int]) -> str:
+    """Return the persisted trial identifier for a device/subscription offer."""
+    return f"{context['price_eur']}/{context['subscription_eur']}"
+
+
+def pricing_choices(parent: ParentPersona) -> tuple[str, str]:
+    """The declared purchase and fallback choices for this household."""
+    return "buy_nova", "competing_purchase" if parent.existing_devices else "defer"
+
+
 def run_pricing(
     runner: ExperimentRunner,
     run_id: str,
@@ -37,7 +47,7 @@ def run_pricing(
     observations: list[ExperimentObservation] = []
     by_parent = {parent.persona_id: parent for parent in parents}
     for context in pricing_contexts():
-        option = f"{context['price_eur']}/{context['subscription_eur']}"
+        option = pricing_option(context)
         for observation in runner.run_parent_experiment(
             run_id, experiment, parents, variants, context
         ):
@@ -57,7 +67,8 @@ def run_pricing(
                 objections.append("subscription")
             if not selected:
                 objections.append("would_not_buy")
-            decision = "buy_nova" if selected else "competing_purchase" if parent.existing_devices else "defer"
+            buy, fallback = pricing_choices(parent)
+            decision = buy if selected else fallback
             observations.append(
                 observation.model_copy(
                     update={
