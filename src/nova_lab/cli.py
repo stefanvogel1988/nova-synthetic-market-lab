@@ -255,6 +255,16 @@ def generate_reports(run_dir: Path) -> None:
                             ("safety", SafetyResult), ("usage", UsageSnapshot)):
             for row in payloads[name]:
                 model.model_validate(row)
+        evidence_run_id = evidence.get("run_id")
+        if not isinstance(evidence_run_id, str) or not evidence_run_id.strip():
+            raise ValueError("missing evidence run identifier")
+        for name in ("usage", "red_team", "safety"):
+            for row in payloads[name]:
+                artifact_run_id = row.get("run_id")
+                if not isinstance(artifact_run_id, str) or not artifact_run_id.strip():
+                    raise ValueError(f"missing run identifier in {name} artifact")
+                if artifact_run_id != evidence_run_id:
+                    raise ValueError("mixed run identifiers")
         for row in payloads["red_team"]:
             RedTeamFinding.model_validate(row["finding"])
         observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]

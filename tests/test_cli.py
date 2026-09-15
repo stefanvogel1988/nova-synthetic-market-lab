@@ -17,6 +17,35 @@ from nova_lab.models.persona import (
 from nova_lab.storage.jsonl import read_jsonl
 
 
+REPORT_RUN_ID_ARTIFACTS = (
+    ("usage",),
+    ("red_team",),
+    ("safety",),
+    ("usage", "red_team"),
+    ("usage", "safety"),
+    ("red_team", "safety"),
+    ("usage", "red_team", "safety"),
+)
+
+
+@pytest.fixture(scope="module")
+def completed_run_for_report_integrity(tmp_path_factory):
+    from nova_lab.cli import run_pipeline
+    from nova_lab.settings import LabSettings
+
+    return run_pipeline(
+        7,
+        tmp_path_factory.mktemp("report-integrity"),
+        settings=LabSettings(parent_count=2, child_count=2, education_count=2),
+    ).run_dir
+
+
+def copied_completed_run(source: Path, destination: Path) -> Path:
+    run_dir = destination / source.name
+    shutil.copytree(source, run_dir)
+    return run_dir
+
+
 def test_validate_command_succeeds():
     result = CliRunner().invoke(app, ["validate"])
 
@@ -131,6 +160,64 @@ def test_report_rejects_invalid_persisted_schemas(tmp_path, filename, field, val
     outcome = CliRunner().invoke(app, ["report", "--run-dir", str(result.run_dir)])
     assert outcome.exit_code != 0
     assert "invalid run" in outcome.output.lower()
+
+
+def test_report_accepts_persisted_artifacts_with_the_evidence_run_id(
+    tmp_path, completed_run_for_report_integrity
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    evidence_run_id = json.loads((run_dir / "evidence.json").read_text())["run_id"]
+
+    for filename in ("usage", "red_team", "safety"):
+        path = run_dir / f"{filename}.jsonl"
+        rows = read_jsonl(path)
+        for row in rows:
+            row["run_id"] = evidence_run_id
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code == 0, outcome.output
+
+
+@pytest.mark.parametrize("artifact_names", REPORT_RUN_ID_ARTIFACTS)
+def test_report_rejects_persisted_artifact_run_id_combinations_before_rendering(
+    tmp_path, completed_run_for_report_integrity, artifact_names
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    report = run_dir / "executive_report.md"
+    before = report.read_bytes()
+    for filename in artifact_names:
+        path = run_dir / f"{filename}.jsonl"
+        rows = read_jsonl(path)
+        rows[0]["run_id"] = "other-completed-run"
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "mixed run identifiers" in outcome.output.lower()
+    assert report.read_bytes() == before
+
+
+@pytest.mark.parametrize("artifact_names", REPORT_RUN_ID_ARTIFACTS)
+def test_report_rejects_missing_persisted_artifact_run_id_combinations_before_rendering(
+    tmp_path, completed_run_for_report_integrity, artifact_names
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    report = run_dir / "executive_report.md"
+    before = report.read_bytes()
+    for filename in artifact_names:
+        path = run_dir / f"{filename}.jsonl"
+        rows = read_jsonl(path)
+        del rows[0]["run_id"]
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "missing run identifier" in outcome.output.lower()
+    assert report.read_bytes() == before
 
 
 def test_validate_default_command_loads_actual_config(tmp_path, monkeypatch):
