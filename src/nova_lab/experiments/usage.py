@@ -1,9 +1,12 @@
 """Synthetic 30-day usage scenarios; these are not claims about real children."""
 
 import random
+from collections import Counter
+from statistics import mean
 
 from pydantic import BaseModel, Field
 
+from nova_lab.child.events import ChildInteractionEvent
 from nova_lab.child.simulator import (
     ChildSessionState,
     lapse_session,
@@ -27,10 +30,15 @@ class UsageSnapshot(BaseModel):
     parent_interventions: float = Field(ge=0)
     mode_mix: dict[str, float]
     session_state: ChildSessionState
+    event_ids: list[str] = Field(default_factory=list)
+    scenario_count: int = Field(default=0, ge=0)
+    self_initiated_interactions: int = Field(default=0, ge=0)
+    abandonment_reasons: dict[str, int] = Field(default_factory=dict)
 
 
 def simulate_usage(
-    child: ChildPersona, variant: ProductVariant, seed: int
+    child: ChildPersona, variant: ProductVariant, seed: int, *,
+    events: list[ChildInteractionEvent] | None = None,
 ) -> list[UsageSnapshot]:
     """Simulate one deterministic synthetic scenario across the five checkpoints."""
     rng = random.Random(seed)
@@ -79,4 +87,26 @@ def simulate_usage(
                 session_state=session_state,
             )
         )
+    if events is not None:
+        for snapshot in snapshots:
+            period_events = [event for event in events if event.period == snapshot.period]
+            if not period_events:
+                raise ValueError("missing child interaction events for usage checkpoint")
+            final_states = {event.scenario_id: event.state_after for event in period_events}
+            useful = [event for event in period_events if event.useful]
+            # Scale the existing novelty assumptions by executed useful events per
+            # scheduled situation. This is a design heuristic, not usage prediction.
+            snapshot.useful_interactions = round(
+                snapshot.useful_interactions * min(1, len(useful) / len(final_states)), 2,
+            )
+            snapshot.frustration = round(mean(s.frustration for s in final_states.values()), 2)
+            snapshot.parent_interventions = sum(s.needs_parent for s in final_states.values())
+            modes = Counter(event.mode for event in useful)
+            snapshot.mode_mix = {mode: modes[mode] / max(1, len(useful)) for mode in ("music", "stories", "learning")}
+            snapshot.event_ids = [event.event_id for event in period_events]
+            snapshot.scenario_count = len(final_states)
+            snapshot.self_initiated_interactions = sum(event.self_initiated for event in period_events)
+            snapshot.abandonment_reasons = dict(Counter(
+                event.abandonment_reason for event in period_events if event.abandonment_reason
+            ))
     return snapshots

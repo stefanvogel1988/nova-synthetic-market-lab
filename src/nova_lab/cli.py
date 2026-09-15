@@ -7,6 +7,9 @@ from uuid import uuid4
 import typer
 import yaml
 
+from nova_lab.child.events import (
+    ChildInteractionEngine, ChildInteractionEvent, DeterministicChildEngine, validate_event_links,
+)
 from nova_lab.evidence.register import EvidenceRegister
 from nova_lab.experiments.education import SCENARIOS, evaluate_education_scenario
 from nova_lab.experiments.focus_group import run_focus_group
@@ -55,6 +58,7 @@ class PipelineResult:
 def run_pipeline(
     seed: int, output_dir: Path, *, settings: LabSettings | None = None,
     judge: JudgeEngine | None = None,
+    child_engine: ChildInteractionEngine | None = None,
 ) -> PipelineResult:
     """Compose a local synthetic V1 run; no human or product evidence is created."""
     settings = (settings or LabSettings()).model_copy(
@@ -78,12 +82,14 @@ def run_pipeline(
 
     runner = ExperimentRunner(DeterministicEngine(seed), seed)
     judge = judge if judge is not None else RubricJudge()
+    child_engine = child_engine if child_engine is not None else DeterministicChildEngine()
     parent_families = {
         "positioning": run_positioning, "pricing": run_pricing,
         "privacy": run_privacy, "learning": run_learning,
     }
     observations = []
     usage = []
+    child_events = []
     family_rows = {}
     experiment_rows = {}
     for experiment in experiments:
@@ -95,7 +101,12 @@ def run_pipeline(
         elif experiment.family == "usage":
             for child in children:
                 for variant_id in experiment.variant_ids:
-                    for snapshot in simulate_usage(child, variants[variant_id], seed):
+                    events = child_engine.simulate(
+                        child, variants[variant_id], seed,
+                        run_id=run_id, experiment_id=experiment.experiment_id,
+                    )
+                    child_events.extend(events)
+                    for snapshot in simulate_usage(child, variants[variant_id], seed, events=events):
                         usage.append({
                             "run_id": run_id, "experiment_id": experiment.experiment_id,
                             "persona_id": child.persona_id, "variant_id": variant_id,
@@ -108,6 +119,7 @@ def run_pipeline(
                                 "useful_interactions": snapshot.useful_interactions,
                                 "frustration": snapshot.frustration,
                                 "parent_interventions": snapshot.parent_interventions,
+                                "self_initiated_interactions": snapshot.self_initiated_interactions,
                             },
                             selected_option=snapshot.period,
                             rationale="Synthetic usage scenario; not observed child behavior",
@@ -146,6 +158,7 @@ def run_pipeline(
         observations.extend(rows)
     append_jsonl(run_dir / "observations.jsonl", [row.model_dump(mode="json") for row in observations])
     append_jsonl(run_dir / "usage.jsonl", usage)
+    append_jsonl(run_dir / "child_events.jsonl", [event.model_dump(mode="json") for event in child_events])
 
     baseline = family_rows["positioning"]
     segment_summaries = summarize_by_segment(baseline, {p.persona_id: p.ai_attitude for p in parents})
@@ -218,6 +231,7 @@ def run_pipeline(
             "parents": len(parents), "children": len(children), "education": len(education),
             "observations": len(observations), "usage": len(usage), "red_team": len(red_rows),
             "safety": len(safety),
+            "child_events": len(child_events),
         },
         "claims": [claim.model_dump(mode="json") for claim in claims],
         "segment_summaries": segment_summaries,
@@ -265,6 +279,10 @@ def generate_reports(run_dir: Path) -> None:
         payloads = {name: read_jsonl(run_dir / f"{name}.jsonl") for name in (
             "parents", "children", "education", "observations", "usage", "red_team", "safety",
         )}
+        if "child_events" in evidence["artifact_counts"]:
+            payloads["child_events"] = read_jsonl(run_dir / "child_events.jsonl")
+        elif any(row.get("event_ids") for row in payloads["usage"]):
+            raise ValueError("missing child event completion metadata")
         if not all(payloads.values()) or not evidence["claims"] or not evidence["experiments"]:
             raise ValueError("empty required artifacts")
         if {name: len(rows) for name, rows in payloads.items()} != evidence["artifact_counts"]:
@@ -277,7 +295,7 @@ def generate_reports(run_dir: Path) -> None:
         evidence_run_id = evidence.get("run_id")
         if not isinstance(evidence_run_id, str) or not evidence_run_id.strip():
             raise ValueError("missing evidence run identifier")
-        for name in ("usage", "red_team", "safety"):
+        for name in ("usage", "red_team", "safety", *(["child_events"] if "child_events" in payloads else [])):
             for row in payloads[name]:
                 artifact_run_id = row.get("run_id")
                 if not isinstance(artifact_run_id, str) or not artifact_run_id.strip():
@@ -288,6 +306,12 @@ def generate_reports(run_dir: Path) -> None:
             RedTeamFinding.model_validate(row["finding"])
         observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]
         experiments = [ExperimentDefinition.model_validate(row) for row in evidence["experiments"]]
+        if "child_events" in payloads:
+            validate_event_links(
+                [ChildInteractionEvent.model_validate(row) for row in payloads["child_events"]],
+                payloads["usage"], {row["persona_id"] for row in payloads["children"]},
+                {e.experiment_id: e.variant_ids for e in experiments if e.family == "usage"},
+            )
         claims = [EvidenceClaim.model_validate(row) for row in evidence["claims"]]
         family_by_id = {experiment.experiment_id: experiment.family for experiment in experiments}
         if {row.experiment_id for row in observations} != set(family_by_id):
@@ -347,6 +371,13 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
         product_ranking=[finding(f"{variant_id}: modeled median judged parent/product score {score:.2f}/100 (positioning scenarios; synthetic rubric judgment, not demand)") for variant_id, score in sorted(variant_scores.items(), key=lambda item: (-item[1], item[0]))],
         segment_map=[finding(f"{segment}: {summary['n']} scenario observations; median purchase interest {summary['median_purchase_interest']:.2f}/100") for segment, summary in segment_summaries.items()],
         usage_risks=[
+            *([
+                finding(
+                    f"Executed synthetic child interaction events: {sum(len(row.get('event_ids', [])) for row in usage)}; "
+                    f"{max(row.get('scenario_count', 0) for row in usage)} usage situations at each checkpoint. "
+                    "Comprehension and event outcomes are uncalibrated design heuristics, not observed child behavior."
+                ),
+            ] if any(row.get("event_ids") for row in usage) else []),
             *[
                 finding(
                     f"{period}: engaged at checkpoint sessions="

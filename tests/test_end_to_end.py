@@ -11,7 +11,7 @@ from nova_lab.storage.jsonl import read_jsonl
 
 ARTIFACTS = {
     "parents.jsonl", "children.jsonl", "education.jsonl", "red_team.jsonl",
-    "observations.jsonl", "usage.jsonl", "safety.jsonl", "evidence.json",
+    "observations.jsonl", "usage.jsonl", "child_events.jsonl", "safety.jsonl", "evidence.json",
     "executive_report.md", "investor_summary.md",
 }
 
