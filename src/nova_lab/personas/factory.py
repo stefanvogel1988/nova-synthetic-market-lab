@@ -12,10 +12,18 @@ from nova_lab.models.persona import (
 
 class PersonaFactory:
     def __init__(self, seed: int):
+        self._seed = seed
         self._rng = random.Random(seed)
 
     def _score(self) -> float:
         return round(self._rng.random(), 2)
+
+    def _balanced_parent_dimension(self, values: list[object], count: int, name: str) -> list[object]:
+        """Return a balanced categorical dimension with its own stable seed."""
+        repeats, remainder = divmod(count, len(values))
+        population = values * repeats + values[:remainder]
+        random.Random(f"parent:{self._seed}:{name}").shuffle(population)
+        return population
 
     def make_parents(self, count: int) -> list[ParentPersona]:
         attitudes = ["enthusiastic", "pragmatic", "cautious", "opposed"]
@@ -24,22 +32,30 @@ class PersonaFactory:
         screens = ["strict", "limited", "pragmatic", "permissive"]
         devices = [[], ["toniebox"], ["wobie"], ["yoto"], ["tablet"], ["smart_speaker"]]
         budgets = [75, 125, 175, 250, 400]
+        # These synthetic categorical dimensions are balanced but independently
+        # seed-shuffled, so a parent's list position does not create a relationship.
+        child_ages = self._balanced_parent_dimension([5, 6, 7, 8, 9], count, "child_age")
+        parent_budgets = self._balanced_parent_dimension(budgets, count, "budget")
+        parent_attitudes = self._balanced_parent_dimension(attitudes, count, "ai_attitude")
+        parent_streams = self._balanced_parent_dimension(streams, count, "streaming_service")
+        parent_screens = self._balanced_parent_dimension(screens, count, "screen_philosophy")
+        parent_devices = self._balanced_parent_dimension(devices, count, "device_ownership")
         return [
             ParentPersona(
                 persona_id=f"parent-{index:03d}",
-                child_age=5 + (index % 5),
+                child_age=child_ages[index],
                 child_count=1 + (index % 3),
-                disposable_budget_eur=budgets[index % len(budgets)],
+                disposable_budget_eur=parent_budgets[index],
                 price_sensitivity=self._score(),
-                ai_attitude=attitudes[index % len(attitudes)],
+                ai_attitude=parent_attitudes[index],
                 privacy_concern=self._score(),
                 subscription_tolerance=self._score(),
-                existing_devices=devices[index % len(devices)],
-                streaming_service=streams[index % len(streams)],
+                existing_devices=list(parent_devices[index]),
+                streaming_service=parent_streams[index],
                 technical_confidence=self._score(),
                 education_orientation=self._score(),
                 convenience_orientation=self._score(),
-                screen_time_philosophy=screens[index % len(screens)],
+                screen_time_philosophy=parent_screens[index],
                 locale_type=locales[index % len(locales)],
             )
             for index in range(count)
