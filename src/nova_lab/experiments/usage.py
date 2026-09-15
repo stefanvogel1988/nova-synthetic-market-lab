@@ -1,12 +1,10 @@
 """Synthetic 30-day usage scenarios; these are not claims about real children."""
 
 import random
-from collections import Counter
-from statistics import mean
 
 from pydantic import BaseModel, Field
 
-from nova_lab.child.events import ChildInteractionEvent
+from nova_lab.child.events import ChildInteractionEvent, summarize_usage_events
 from nova_lab.child.simulator import (
     ChildSessionState,
     lapse_session,
@@ -90,29 +88,14 @@ def simulate_usage(
     if events is not None:
         for snapshot in snapshots:
             period_events = [event for event in events if event.period == snapshot.period]
-            if not period_events:
-                raise ValueError("missing child interaction events for usage checkpoint")
-            final_states = {event.scenario_id: event.state_after for event in period_events}
-            useful = [event for event in period_events if event.useful]
+            aggregates = summarize_usage_events(period_events)
             # Scale the existing novelty assumptions by executed useful events per
             # scheduled situation. This is a design heuristic, not usage prediction.
             snapshot.useful_interactions = round(
-                snapshot.useful_interactions * min(1, len(useful) / len(final_states)), 2,
+                snapshot.useful_interactions * min(
+                    1, sum(event.useful for event in period_events) / aggregates["scenario_count"],
+                ), 2,
             )
-            snapshot.frustration = round(mean(s.frustration for s in final_states.values()), 2)
-            # Count situations with explicit adult help, even if the child later
-            # lapses. ASR clarification alone does not request adult intervention.
-            snapshot.parent_interventions = len({
-                event.scenario_id for event in period_events
-                if event.kind in {"misunderstanding", "adult_bridge", "refusal"}
-                and event.state_after.needs_parent
-            })
-            modes = Counter(event.mode for event in useful)
-            snapshot.mode_mix = {mode: modes[mode] / max(1, len(useful)) for mode in ("music", "stories", "learning")}
-            snapshot.event_ids = [event.event_id for event in period_events]
-            snapshot.scenario_count = len(final_states)
-            snapshot.self_initiated_interactions = sum(event.self_initiated for event in period_events)
-            snapshot.abandonment_reasons = dict(Counter(
-                event.abandonment_reason for event in period_events if event.abandonment_reason
-            ))
+            for field, value in aggregates.items():
+                setattr(snapshot, field, value)
     return snapshots

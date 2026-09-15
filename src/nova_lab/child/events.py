@@ -4,8 +4,9 @@ Transition probabilities, comprehension and connectivity outcomes are uncalibrat
 design assumptions. Responses are local fixtures, not a production child AI.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import random
+from statistics import mean
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -164,6 +165,36 @@ class DeterministicChildEngine:
         return rows
 
 
+def summarize_usage_events(events: list[ChildInteractionEvent]) -> dict:
+    """Derive checkpoint summaries solely from executed synthetic child events.
+
+    The separate novelty model supplies useful_interactions and session_state;
+    these are not direct event aggregates.
+    """
+    if not events:
+        raise ValueError("missing child interaction events for usage checkpoint")
+    final_states = {event.scenario_id: event.state_after for event in events}
+    useful = [event for event in events if event.useful]
+    modes = Counter(event.mode for event in useful)
+    return {
+        "frustration": round(mean(state.frustration for state in final_states.values()), 2),
+        # A later lapse must not erase an earlier explicit request for adult help.
+        "parent_interventions": len({
+            event.scenario_id for event in events
+            if event.kind in {"misunderstanding", "adult_bridge", "refusal"}
+            and event.state_after.needs_parent
+        }),
+        "mode_mix": {mode: modes[mode] / max(1, len(useful))
+                     for mode in ("music", "stories", "learning")},
+        "event_ids": [event.event_id for event in events],
+        "scenario_count": len(final_states),
+        "self_initiated_interactions": sum(event.self_initiated for event in events),
+        "abandonment_reasons": dict(Counter(
+            event.abandonment_reason for event in events if event.abandonment_reason
+        )),
+    }
+
+
 def validate_event_links(events, usage, child_ids, usage_variants):
     """Reject mixed or broken session associations before reports are rewritten."""
     groups = defaultdict(list)
@@ -186,10 +217,19 @@ def validate_event_links(events, usage, child_ids, usage_variants):
     for snapshot in usage:
         key = tuple(snapshot[field] for field in ("experiment_id", "persona_id", "variant_id", "period"))
         rows = by_snapshot.pop(key, [])
-        if (set(snapshot.get("event_ids", [])) != {e.event_id for e in rows}
-                or len(snapshot.get("event_ids", [])) != len(rows)
-                or {e.scenario_id for e in rows} != set(USAGE_SCENARIOS)
-                or snapshot.get("scenario_count") != len(USAGE_SCENARIOS)):
+        if {e.scenario_id for e in rows} != set(USAGE_SCENARIOS):
             raise ValueError("child events do not match usage snapshots")
+        for field, expected in summarize_usage_events(rows).items():
+            actual = snapshot.get(field)
+            matches = actual == expected
+            if field == "event_ids":
+                # Event references do not require the same storage order.
+                matches = set(actual or []) == set(expected) and len(actual or []) == len(expected)
+            if not matches:
+                raise ValueError(
+                    f"usage event summary mismatch: run={snapshot['run_id']} "
+                    f"persona={snapshot['persona_id']} experiment={snapshot['experiment_id']} "
+                    f"variant={snapshot['variant_id']} period={snapshot['period']} field={field}"
+                )
     if by_snapshot:
         raise ValueError("child events lack usage snapshots")

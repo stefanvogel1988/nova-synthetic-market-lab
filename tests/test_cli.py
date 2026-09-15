@@ -217,6 +217,38 @@ def test_report_regenerates_from_saved_artifacts_without_simulation(tmp_path, mo
     assert "incomplete" in outcome.output.lower()
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("abandonment_reasons", {"invented_reason": 9000}),
+    ("parent_interventions", 9000),
+    ("frustration", 1.0),
+    ("mode_mix", {"music": 1.0, "stories": 0.0, "learning": 0.0}),
+    ("self_initiated_interactions", 9000),
+    ("scenario_count", 9000),
+    ("event_ids", ["foreign-event"]),
+])
+def test_report_rejects_usage_summaries_that_disagree_with_child_events(
+    tmp_path, completed_run_for_report_integrity, field, value
+):
+    # Trusting persisted aggregates instead of the referenced events must fail.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "usage.jsonl"
+    usage = read_jsonl(path)
+    assert usage[0][field] != value
+    usage[0][field] = value
+    path.write_text("\n".join(json.dumps(row) for row in usage) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "incomplete or invalid run" in outcome.output
+    assert usage[0]["run_id"] in outcome.output
+    assert usage[0]["persona_id"] in outcome.output
+    assert field in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
 def test_executive_report_shows_education_usage_and_safety_risk_distributions(tmp_path):
     from nova_lab.cli import run_pipeline
     from nova_lab.settings import LabSettings
