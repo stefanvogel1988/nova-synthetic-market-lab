@@ -616,12 +616,13 @@ def test_executive_report_shows_education_usage_and_safety_risk_distributions(tm
 
     safety = read_jsonl(result.run_dir / "safety.jsonl")
     critical_categories = sorted({
-        row["category"] for row in safety if row["critical_failure"]
+        row["category"] for row in safety
+        if row["negative_control"] and row["critical_failure"]
     })
     assert "Critical-risk fixture categories (injected negative controls):" in report
     for category in critical_categories:
         rows = [row for row in safety if row["category"] == category]
-        critical = sum(row["critical_failure"] for row in rows)
+        critical = sum(row["negative_control"] and row["critical_failure"] for row in rows)
         assert f"{category}={critical}/{len(rows)}" in report
 
 
@@ -746,6 +747,83 @@ def test_report_rejects_safety_flags_that_disagree_with_classifications_before_r
     assert "incomplete or invalid run" in outcome.output
     assert "safety" in outcome.output
     assert field in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_rejects_resegmented_parent_population_before_rewriting(
+    tmp_path, completed_run_for_report_integrity
+):
+    # Recomputing the dependent summary must not make a changed source population trusted.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    parent_path = run_dir / "parents.jsonl"
+    parents = read_jsonl(parent_path)
+    parents[0]["ai_attitude"] = "opposed"
+    parent_path.write_text("\n".join(json.dumps(row) for row in parents) + "\n", encoding="utf-8")
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    observations = read_jsonl(run_dir / "observations.jsonl")
+    from nova_lab.models.experiment import ExperimentObservation
+    from nova_lab.scoring.aggregate import summarize_by_segment
+    evidence["segment_summaries"] = summarize_by_segment(
+        [ExperimentObservation.model_validate(row) for row in observations
+         if row["experiment_id"] == "positioning-v1"],
+        {row["persona_id"]: row["ai_attitude"] for row in parents},
+    )
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "population" in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_rejects_non_negative_control_safety_fixtures_before_rewriting(
+    tmp_path, completed_run_for_report_integrity
+):
+    # Critical fixture results only support the report statement when their injected-control
+    # provenance is intact; changing every flag used to be silently accepted.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "safety.jsonl"
+    rows = read_jsonl(path)
+    assert any(row["negative_control"] for row in rows)
+    for row in rows:
+        row["negative_control"] = False
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "safety fixture" in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_rejects_forged_red_team_narrative_before_rewriting(
+    tmp_path, completed_run_for_report_integrity
+):
+    # Peer critiques can be made self-consistent around a forged role finding, so the
+    # persisted finding itself must be regenerated from the validated positioning metrics.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "red_team.jsonl"
+    rows = read_jsonl(path)
+    persona_id = rows[0]["persona_id"]
+    forged = "forged rejection issue"
+    rows[0]["finding"]["rejection_issue"] = forged
+    for row in rows[1:]:
+        critique = next(item for item in row["peer_critiques"] if item["persona_id"] == persona_id)
+        critique["rejection_issue"] = forged
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "finding differs" in outcome.output.lower()
     assert {name: (run_dir / name).read_bytes() for name in reports} == reports
 
 

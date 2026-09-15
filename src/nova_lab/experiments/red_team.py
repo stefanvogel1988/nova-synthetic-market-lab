@@ -91,6 +91,7 @@ def peer_critiques(
 
 def validate_red_team_records(
     rows: list[dict], *, run_id: str, members: list[RedTeamPersona], committee: dict,
+    expected_findings: dict[str, RedTeamFinding] | None = None,
 ) -> None:
     """Reconcile persisted records using the existing panel and deliberation rules.
 
@@ -113,6 +114,8 @@ def validate_red_team_records(
             raise ValueError(f"{context}: persona differs from the run's panel")
         if record.finding.persona_id != key:
             raise ValueError(f"{context}: finding persona does not match record")
+        if expected_findings is not None and record.finding != expected_findings[key]:
+            raise ValueError(f"{context}: finding differs from the validated role metrics")
         if record.pre_score != record.finding.score:
             raise ValueError(f"{context}: pre_score differs from finding.score")
         records[key] = record

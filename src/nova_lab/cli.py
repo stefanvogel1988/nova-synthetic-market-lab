@@ -301,6 +301,54 @@ def build_evidence_claims(
     return register.all()
 
 
+def _validate_persisted_population(payloads: dict[str, list[dict]], seed: int) -> None:
+    """Bind population artifacts to the deterministic population that produced a run."""
+    factory = PersonaFactory(seed)
+    expected = {
+        "parents": factory.make_parents(len(payloads["parents"])),
+        "children": factory.make_children(len(payloads["children"])),
+        "education": factory.make_education(len(payloads["education"])),
+    }
+    models = {
+        "parents": ParentPersona,
+        "children": ChildPersona,
+        "education": EducationPersona,
+    }
+    for name, personas in expected.items():
+        actual = [models[name].model_validate(row) for row in payloads[name]]
+        if sorted(actual, key=lambda persona: persona.persona_id) != personas:
+            raise ValueError(f"{name} population differs from the deterministic run population")
+
+
+def _expected_safety_fixtures() -> list[dict]:
+    cases = yaml.safe_load((PROJECT_ROOT / "config/safety.yaml").read_text(encoding="utf-8"))["cases"]
+    fixtures = []
+    for case in cases:
+        expected = SafetyClass(case["expected"])
+        for prompt in expand_prompt(case["base_prompt"]):
+            for negative_control in (False, True):
+                actual = SafetyClass.NORMAL if negative_control else expected
+                fixtures.append({
+                    "category": case["category"], "prompt": prompt,
+                    "evaluation_mode": "synthetic_fixture", "negative_control": negative_control,
+                    **evaluate_safety(expected, actual).model_dump(mode="json"),
+                })
+    return fixtures
+
+
+def _validate_safety_fixtures(rows: list[dict]) -> None:
+    fields = (
+        "category", "prompt", "evaluation_mode", "negative_control", "expected", "actual",
+        "critical_failure", "passed",
+    )
+    actual = sorted(
+        (json.dumps({field: row.get(field) for field in fields}, sort_keys=True) for row in rows)
+    )
+    expected = sorted(json.dumps(row, sort_keys=True) for row in _expected_safety_fixtures())
+    if actual != expected:
+        raise ValueError("safety fixtures differ from configured injected controls")
+
+
 def generate_reports(run_dir: Path) -> None:
     """Rebuild reports from a complete persisted run without rerunning simulations."""
     try:
@@ -338,11 +386,8 @@ def generate_reports(run_dir: Path) -> None:
                     raise ValueError(f"missing run identifier in {name} artifact")
                 if artifact_run_id != evidence_run_id:
                     raise ValueError("mixed run identifiers")
-        validate_red_team_records(
-            payloads["red_team"], run_id=evidence_run_id,
-            members=PersonaFactory(evidence["seed"]).make_red_team(),
-            committee=evidence["investment_committee"],
-        )
+        _validate_persisted_population(payloads, evidence["seed"])
+        _validate_safety_fixtures(payloads["safety"])
         observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]
         experiments = [ExperimentDefinition.model_validate(row) for row in evidence["experiments"]]
         validate_observations(
@@ -370,6 +415,16 @@ def generate_reports(run_dir: Path) -> None:
         if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
             raise ValueError("missing report families")
         baseline = family_rows["positioning"]
+        red_team_members = PersonaFactory(evidence["seed"]).make_red_team()
+        role_metrics = {
+            metric: median(row.metrics[metric] for row in baseline)
+            for metric in baseline[0].metrics
+        }
+        validate_red_team_records(
+            payloads["red_team"], run_id=evidence_run_id, members=red_team_members,
+            committee=evidence["investment_committee"],
+            expected_findings=assess_independently(red_team_members, role_metrics, evidence["seed"]),
+        )
         expected_claims = build_evidence_claims(experiments, {
             experiment.experiment_id: [
                 row for row in observations if row.experiment_id == experiment.experiment_id
@@ -440,7 +495,10 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
                 "synthetic only, not observed child behavior."
             ),
         ])
-    critical_count = sum(row["critical_failure"] for row in safety)
+    critical_fixtures = [
+        row for row in safety if row["negative_control"] and row["critical_failure"]
+    ]
+    critical_count = len(critical_fixtures)
     education_rows = family_rows["education"]
     education_fit = sum(
         row.metrics["usefulness"] >= 65
@@ -456,7 +514,7 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
     privacy_fits = [row.metrics["privacy_procurement_fit"] for row in education_rows]
     critical_categories = [
         f"{category}={sum(row['critical_failure'] for row in rows)}/{len(rows)}"
-        for category in sorted({row["category"] for row in safety if row["critical_failure"]})
+        for category in sorted({row["category"] for row in critical_fixtures})
         for rows in [[row for row in safety if row["category"] == category]]
     ]
     return build_report_context(
