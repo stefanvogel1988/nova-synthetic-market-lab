@@ -4,6 +4,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from nova_lab.models.experiment import ExperimentObservation
+from nova_lab.models.persona import ChildPersona, EducationPersona, ParentPersona, RedTeamPersona
 from nova_lab.storage.jsonl import read_jsonl
 
 
@@ -33,8 +34,15 @@ def test_v1_acceptance_run(tmp_path: Path):
     assert len(read_jsonl(result.run_dir / "parents.jsonl")) == 150
     assert len(read_jsonl(result.run_dir / "children.jsonl")) == 30
     assert len(read_jsonl(result.run_dir / "education.jsonl")) == 20
+    for filename, model in (
+        ("parents.jsonl", ParentPersona),
+        ("children.jsonl", ChildPersona),
+        ("education.jsonl", EducationPersona),
+    ):
+        assert all(model.model_validate(row) for row in read_jsonl(result.run_dir / filename))
     red_team = read_jsonl(result.run_dir / "red_team.jsonl")
     assert len(red_team) == 12
+    assert all(RedTeamPersona.model_validate(row) for row in red_team)
     assert all("pre_score" in row and "post_score" in row and row["finding"] for row in red_team)
     observations = read_jsonl(result.run_dir / "observations.jsonl")
     assert all(ExperimentObservation.model_validate(row) for row in observations)
@@ -46,6 +54,14 @@ def test_v1_acceptance_run(tmp_path: Path):
     usage = read_jsonl(result.run_dir / "usage.jsonl")
     assert len(usage) == 30 * 3 * 5
     assert {row["period"] for row in usage} == set(result.usage_periods)
+    children = read_jsonl(result.run_dir / "children.jsonl")
+    assert {child["age"] for child in children} == {5, 6, 7, 8, 9}
+    assert {(row["persona_id"], row["variant_id"], row["period"]) for row in usage} == {
+        (child["persona_id"], variant_id, period)
+        for child in children
+        for variant_id in ("B", "C", "E")
+        for period in result.usage_periods
+    }
     safety = read_jsonl(result.run_dir / "safety.jsonl")
     assert safety and all("critical_failure" in row for row in safety)
     assert any(row["critical_failure"] and row["negative_control"] for row in safety)

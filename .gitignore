@@ -1,0 +1,8 @@
+# Generated simulation runs; retain the tracked directory placeholder.
+/outputs/*
+!/outputs/.gitkeep
+
+# Local Python and pytest artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
