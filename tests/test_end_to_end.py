@@ -1,4 +1,5 @@
 import json
+from math import isclose
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -44,6 +45,15 @@ def test_v1_acceptance_run(tmp_path: Path):
     assert len(red_team) == 12
     assert all(RedTeamPersona.model_validate(row) for row in red_team)
     assert all("pre_score" in row and "post_score" in row and row["finding"] for row in red_team)
+    assert len({row["pre_score"] for row in red_team}) > 1
+    assert len({row["post_score"] for row in red_team}) > 1
+    for row in red_team:
+        assert len(row["peer_critiques"]) == 11
+        assert all(peer["persona_id"] != row["persona_id"] for peer in row["peer_critiques"])
+        assert row["post_score"] < row["pre_score"]
+        assert isclose(row["post_score"], max(0, row["pre_score"] + sum(
+            peer["adjustment"] for peer in row["peer_critiques"]
+        )))
     observations = read_jsonl(result.run_dir / "observations.jsonl")
     assert all(ExperimentObservation.model_validate(row) for row in observations)
     assert {row["variant_id"] for row in observations} == {"A", "B", "C", "D", "E", "F"}

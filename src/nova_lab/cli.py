@@ -15,7 +15,7 @@ from nova_lab.experiments.learning import run_learning
 from nova_lab.experiments.positioning import run_positioning
 from nova_lab.experiments.pricing import run_pricing
 from nova_lab.experiments.privacy import run_privacy
-from nova_lab.experiments.red_team import RedTeamFinding
+from nova_lab.experiments.red_team import assess_independently, peer_critiques
 from nova_lab.experiments.registry import load_experiments, load_variants
 from nova_lab.experiments.runner import ExperimentRunner
 from nova_lab.experiments.usage import simulate_usage
@@ -138,25 +138,27 @@ def run_pipeline(
         objections = sorted({objection for row in baseline if row.persona_id == persona_id for objection in row.objections})
         critique_effects[persona_id] = apply_positivity_penalty(score, objections) - score
     focus_group = run_focus_group(initial_positions, critique_effects)
+    # Complete all independent role judgments before sharing any peer critique.
+    role_metrics = {
+        metric: median(row.metrics[metric] for row in baseline)
+        for metric in baseline[0].metrics
+    }
+    initial_findings = assess_independently(red_team, role_metrics, seed)
+    critiques = {
+        member.persona_id: peer_critiques(member, initial_findings) for member in red_team
+    }
     committee = deliberate(
-        {member.persona_id: round(median(variant_scores.values()), 2) for member in red_team},
-        {member.persona_id: -round(member.rejection_bias * 20, 2) for member in red_team},
+        {key: finding.score for key, finding in initial_findings.items()},
+        {key: sum(peer["adjustment"] for peer in peers) for key, peers in critiques.items()},
     )
-    best_variant = max(variant_scores, key=variant_scores.get)
     red_rows = []
     for member in red_team:
-        finding = RedTeamFinding(
-            persona_id=member.persona_id,
-            strongest_win=f"Variant {best_variant} has the highest modeled median purchase interest in the positioning scenarios",
-            strongest_failure="No observed purchase, sustained child use or product safety evidence",
-            rejection_issue=f"{member.role}: evidence gap; synthetic rejection-bias adjustment only",
-            score=committee.post_scores[member.persona_id],
-            evidence_to_change_mind="Observed family trials, safety response testing and actual purchase decisions",
-        )
+        finding = initial_findings[member.persona_id]
         red_rows.append({
             "run_id": run_id, **member.model_dump(mode="json"),
             "pre_score": committee.pre_scores[member.persona_id],
             "post_score": committee.post_scores[member.persona_id],
+            "peer_critiques": critiques[member.persona_id],
             "finding": finding.model_dump(mode="json"),
         })
     append_jsonl(run_dir / "red_team.jsonl", red_rows)
@@ -209,7 +211,7 @@ def run_pipeline(
         education_opportunities=[finding(f"{scenario}: modeled median usefulness {median(row.metrics['usefulness'] for row in family_rows['education'] if row.selected_option == scenario):.2f}/100; classroom validation required") for scenario in SCENARIOS],
         price_sensitivity=[finding(f"EUR {option} (device/month): modeled median purchase interest {median(row.metrics['purchase_interest'] for row in family_rows['pricing'] if row.selected_option == option):.2f}/100; not real willingness to pay") for option in dict.fromkeys(row.selected_option for row in family_rows['pricing'])],
         red_team=[finding(f"{row['role']}: {row['finding']['rejection_issue']}; strongest win: {row['finding']['strongest_win']}; strongest failure: {row['finding']['strongest_failure']}; required evidence: {row['finding']['evidence_to_change_mind']}") for row in red_rows],
-        investment_committee=[finding(f"{row['role']}: pre={row['pre_score']:.2f}, post={row['post_score']:.2f}; modeled bias adjustment, not an investor decision") for row in red_rows],
+        investment_committee=[finding(f"{row['role']}: pre={row['pre_score']:.2f}, post={row['post_score']:.2f}; independent role-proxy judgment followed by modeled peer-critique adjustment, not an investor decision") for row in red_rows],
         safety=[ExecutiveFinding(EvidenceStatus.UNKNOWN, f"Synthetic fixture checks: {len(safety)}; critical_failure={critical_count} in injected negative controls. No response classifier or real product answers were tested; product safety remains unvalidated.")],
     )
     for name in ("executive_report", "investor_summary"):
