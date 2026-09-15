@@ -6,6 +6,11 @@ from nova_lab.models.experiment import ExperimentDefinition
 from nova_lab.models.product import ProductVariant
 
 
+REQUIRED_EXPERIMENT_FAMILIES = frozenset({
+    "positioning", "pricing", "privacy", "learning", "usage", "education",
+})
+
+
 def load_variants(path: Path) -> dict[str, ProductVariant]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     variants = [ProductVariant.model_validate(item) for item in data["variants"]]
@@ -41,3 +46,8 @@ def validate_registry(variants: dict[str, ProductVariant], experiments: list[Exp
         unknown = set(experiment.variant_ids) - variants.keys()
         if unknown:
             raise ValueError(f"{experiment.experiment_id}: unknown variant references {sorted(unknown)}")
+    missing_families = REQUIRED_EXPERIMENT_FAMILIES - {experiment.family for experiment in experiments}
+    if missing_families:
+        raise ValueError(
+            "missing required experiment families: " + ", ".join(sorted(missing_families))
+        )

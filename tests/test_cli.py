@@ -53,6 +53,93 @@ def test_validate_command_succeeds():
     assert "valid" in result.stdout.lower()
 
 
+REQUIRED_EXPERIMENT_FAMILIES = (
+    "positioning",
+    "pricing",
+    "privacy",
+    "learning",
+    "usage",
+    "education",
+)
+
+
+def _complete_experiment_config() -> list[dict]:
+    return yaml.safe_load(Path("config/experiments.yaml").read_text())["experiments"]
+
+
+def _validate_experiments(tmp_path: Path, experiments: list[dict]):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for name in ("lab", "variants", "safety"):
+        shutil.copyfile(Path("config") / f"{name}.yaml", tmp_path / f"{name}.yaml")
+    experiment_path = tmp_path / "experiments.yaml"
+    experiment_path.write_text(yaml.safe_dump({"experiments": experiments}), encoding="utf-8")
+    return CliRunner().invoke(
+        app,
+        [
+            "validate",
+            "--config", str(tmp_path / "lab.yaml"),
+            "--variants", str(tmp_path / "variants.yaml"),
+            "--experiments", str(experiment_path),
+            "--safety", str(tmp_path / "safety.yaml"),
+        ],
+    )
+
+
+def test_validate_accepts_a_complete_v1_experiment_family_configuration(tmp_path: Path):
+    outcome = _validate_experiments(tmp_path, _complete_experiment_config())
+
+    assert outcome.exit_code == 0, outcome.output
+    assert "configuration valid" in outcome.output.lower()
+
+
+@pytest.mark.parametrize("missing_family", REQUIRED_EXPERIMENT_FAMILIES)
+def test_validate_rejects_each_missing_required_v1_experiment_family(
+    tmp_path: Path, missing_family: str
+):
+    experiments = [
+        experiment
+        for experiment in _complete_experiment_config()
+        if experiment["family"] != missing_family
+    ]
+
+    outcome = _validate_experiments(tmp_path, experiments)
+
+    assert outcome.exit_code != 0
+    assert "missing required experiment families" in outcome.output.lower()
+    assert missing_family in outcome.output
+
+
+def test_validate_reports_all_missing_required_v1_experiment_families(tmp_path: Path):
+    missing_families = {"pricing", "usage", "education"}
+    experiments = [
+        experiment
+        for experiment in _complete_experiment_config()
+        if experiment["family"] not in missing_families
+    ]
+
+    outcome = _validate_experiments(tmp_path, experiments)
+
+    assert outcome.exit_code != 0
+    assert "missing required experiment families" in outcome.output.lower()
+    for family in missing_families:
+        assert family in outcome.output
+
+
+def test_validate_keeps_extra_known_and_unknown_family_behavior_compatible(tmp_path: Path):
+    experiments = _complete_experiment_config()
+    experiments.append({**experiments[0], "experiment_id": "positioning-extra"})
+
+    extra_outcome = _validate_experiments(tmp_path / "extra", experiments)
+    unknown_outcome = _validate_experiments(
+        tmp_path / "unknown",
+        [{**experiments[0], "family": "unrecognized"}, *experiments[1:]],
+    )
+
+    assert extra_outcome.exit_code == 0, extra_outcome.output
+    assert unknown_outcome.exit_code != 0
+    assert "unsupported experiment family" in unknown_outcome.output.lower()
+
+
 def test_generate_writes_schema_valid_populations_to_new_run_directory(
     tmp_path: Path,
 ):
