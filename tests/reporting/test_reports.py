@@ -1,0 +1,59 @@
+from pathlib import Path
+
+from nova_lab.models.common import EvidenceSourceType, EvidenceStatus
+from nova_lab.models.evidence import EvidenceClaim, EvidenceSource
+from nova_lab.reporting.context import build_report_context
+from nova_lab.reporting.markdown import render_markdown
+
+
+def test_investor_report_contains_synthetic_disclaimer():
+    text = render_markdown(
+        Path("templates/investor_summary.md.j2"),
+        {"proven": [], "synthetic": [], "contested": [], "human_tests": []},
+    )
+
+    assert "does not prove product-market fit" in text.lower()
+    assert "PROVEN" in text
+    assert "SYNTHETIC" in text
+
+
+def test_report_context_separates_proven_claims_from_synthetic_findings():
+    proven = EvidenceClaim(
+        claim_id="observed-trust",
+        claim_text="Observed parents prefer a physical microphone switch.",
+        category="trust",
+        current_status=EvidenceStatus.PROVEN,
+        supporting_evidence=[
+            EvidenceSource(
+                source_type=EvidenceSourceType.DIRECT_HUMAN_OBSERVATION,
+                source_id="interview-1",
+                description="Parent interview",
+            )
+        ],
+        counterevidence=[],
+        synthetic_experiments=[],
+        segment_notes=[],
+        confidence_note="Observed in interview",
+        required_real_world_test="Replicate with additional parents",
+        next_decision="CONTINUE",
+    )
+    supported = EvidenceClaim(
+        claim_id="price",
+        claim_text="Parents will pay EUR 179.",
+        category="commercial",
+        current_status=EvidenceStatus.SUPPORTED,
+        supporting_evidence=[],
+        counterevidence=[],
+        synthetic_experiments=["pricing-1"],
+        segment_notes=[],
+        confidence_note="Synthetic signal only",
+        required_real_world_test="Run a parent price smoke test",
+        next_decision="VALIDATE_WITH_HUMANS",
+    )
+
+    context = build_report_context([proven, supported])
+
+    assert context["proven"] == [proven.claim_text]
+    assert context["synthetic"] == [supported.claim_text]
+    assert proven.claim_text not in context["synthetic"]
+    assert context["human_tests"] == [supported.required_real_world_test]

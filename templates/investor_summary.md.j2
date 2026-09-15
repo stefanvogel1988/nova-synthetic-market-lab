@@ -1,0 +1,23 @@
+# NOVA Synthetic Validation — Investor Summary
+
+> **Synthetic-evidence disclaimer:** Synthetic simulation is directional. It does not prove product-market fit, real purchase intent, learning outcomes, or future revenue.
+
+## PROVEN / external or observed evidence
+{% for item in proven %}- {{ item }}
+{% else %}- None recorded in this synthetic run.
+{% endfor %}
+
+## SYNTHETIC findings
+{% for item in synthetic %}- {{ item }}
+{% else %}- None.
+{% endfor %}
+
+## CONTESTED findings
+{% for item in contested %}- {{ item }}
+{% else %}- None.
+{% endfor %}
+
+## Required human validation
+{% for item in human_tests %}- {{ item }}
+{% else %}- None.
+{% endfor %}
