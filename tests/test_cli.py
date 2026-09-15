@@ -162,6 +162,96 @@ def test_validate_command_succeeds():
     assert "valid" in result.stdout.lower()
 
 
+@pytest.mark.parametrize("mutation", [
+    "pre_out_of_bounds", "post_out_of_bounds", "unknown_finding", "wrong_finding_persona",
+    "unknown_persona", "wrong_persona", "wrong_role", "wrong_rejection_bias",
+    "pre_mismatch", "post_mismatch", "unknown_peer", "missing_peer", "duplicate_peer",
+    "critique_adjustment", "critique_severity", "critique_rejection_issue", "missing_critiques",
+    "duplicate", "missing", "extra", "committee_pre", "committee_post", "committee_member",
+])
+def test_report_rejects_inconsistent_red_team_records_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, mutation
+):
+    # Trusting standalone persona/finding schemas misses inconsistent complete records.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "red_team.jsonl"
+    rows = read_jsonl(path)
+    row = rows[0]
+    evidence_path = run_dir / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+    if mutation in {"pre_out_of_bounds", "post_out_of_bounds"}:
+        row[mutation.split("_")[0] + "_score"] = 9000
+    elif mutation == "unknown_finding":
+        row["finding"]["persona_id"] = "unknown-finding"
+    elif mutation == "wrong_finding_persona":
+        row["finding"]["persona_id"] = rows[1]["persona_id"]
+    elif mutation == "unknown_persona":
+        row["persona_id"] = "foreign-persona"
+    elif mutation == "wrong_persona":
+        row["persona_id"] = rows[1]["persona_id"]
+    elif mutation == "wrong_role":
+        row["role"] = rows[1]["role"]
+    elif mutation == "wrong_rejection_bias":
+        row["rejection_bias"] = 0
+    elif mutation in {"pre_mismatch", "post_mismatch"}:
+        row[mutation.split("_")[0] + "_score"] += 1
+    elif mutation == "unknown_peer":
+        row["peer_critiques"][0]["persona_id"] = "foreign-peer"
+    elif mutation == "missing_peer":
+        row["peer_critiques"].pop()
+    elif mutation == "duplicate_peer":
+        row["peer_critiques"][1] = dict(row["peer_critiques"][0])
+    elif mutation in {"critique_adjustment", "critique_severity"}:
+        row["peer_critiques"][0][mutation.removeprefix("critique_")] += 0.1
+    elif mutation == "critique_rejection_issue":
+        row["peer_critiques"][0]["rejection_issue"] = "invented peer contradiction"
+    elif mutation == "missing_critiques":
+        del row["peer_critiques"]
+    elif mutation == "duplicate":
+        rows[1] = dict(row)
+    elif mutation == "missing":
+        rows.pop()
+    elif mutation == "extra":
+        rows.append({**row, "persona_id": "extra-member"})
+    elif mutation in {"committee_pre", "committee_post"}:
+        evidence["investment_committee"][mutation.removeprefix("committee_") + "_scores"][row["persona_id"]] += 1
+    elif mutation == "committee_member":
+        evidence["investment_committee"]["pre_scores"]["foreign-member"] = 50
+    else:
+        raise AssertionError(f"unhandled mutation: {mutation}")
+    path.write_text("\n".join(json.dumps(item) for item in rows) + "\n", encoding="utf-8")
+    evidence["artifact_counts"]["red_team"] = len(rows)
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0, "inconsistent red-team record was accepted"
+    assert "incomplete or invalid run" in outcome.output.lower()
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+def test_report_accepts_complete_red_team_records_without_changing_artifacts(
+    tmp_path, completed_run_for_report_integrity
+):
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "red_team.jsonl"
+    rows = read_jsonl(path)
+    assert all({"pre_score", "post_score", "finding", "peer_critiques"} <= row.keys()
+               for row in rows)
+    assert all(len(row["peer_critiques"]) == len(rows) - 1 for row in rows)
+    before = path.read_bytes()
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code == 0, outcome.output
+    assert path.read_bytes() == before
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
 REQUIRED_EXPERIMENT_FAMILIES = (
     "positioning",
     "pricing",

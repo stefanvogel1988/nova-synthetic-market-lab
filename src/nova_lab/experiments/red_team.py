@@ -2,8 +2,13 @@
 
 from pydantic import BaseModel, Field
 import random
+from typing import Annotated
 
+from nova_lab.experiments.investment_committee import InvestmentCommitteeResult, deliberate
 from nova_lab.models.persona import RedTeamPersona
+
+
+RedTeamScore = Annotated[float, Field(ge=0, le=100)]
 
 
 class RedTeamFinding(BaseModel):
@@ -13,8 +18,18 @@ class RedTeamFinding(BaseModel):
     strongest_win: str
     strongest_failure: str
     rejection_issue: str
-    score: float = Field(ge=0, le=100)
+    score: RedTeamScore
     evidence_to_change_mind: str
+
+
+class RedTeamRecord(RedTeamPersona):
+    """The complete persisted member judgment and peer-deliberation snapshot."""
+
+    run_id: str
+    pre_score: RedTeamScore
+    post_score: RedTeamScore
+    finding: RedTeamFinding
+    peer_critiques: list[dict]
 
 
 # These are disclosed synthetic proxies, not evidence of investment or safety.
@@ -72,3 +87,50 @@ def peer_critiques(
         "severity": round((100 - peer.score) / 100, 4),
         "adjustment": -round((100 - peer.score) / 100 * member.rejection_bias * 12 / len(peers), 4),
     } for peer in peers]
+
+
+def validate_red_team_records(
+    rows: list[dict], *, run_id: str, members: list[RedTeamPersona], committee: dict,
+) -> None:
+    """Reconcile persisted records using the existing panel and deliberation rules.
+
+    V1 findings are embedded in their member record and keyed by persona_id;
+    there is no separate finding ID or contradiction-state field.
+    """
+    expected_members = {member.persona_id: member for member in members}
+    records = {}
+    for row in rows:
+        record = RedTeamRecord.model_validate(row)
+        key = record.persona_id
+        context = f"run {run_id}, red-team persona {key}"
+        if record.run_id != run_id:
+            raise ValueError(f"{context}: mixed run identifiers")
+        if key not in expected_members:
+            raise ValueError(f"{context}: unexpected persona")
+        if key in records:
+            raise ValueError(f"{context}: duplicate record")
+        if RedTeamPersona.model_validate(row) != expected_members[key]:
+            raise ValueError(f"{context}: persona differs from the run's panel")
+        if record.finding.persona_id != key:
+            raise ValueError(f"{context}: finding persona does not match record")
+        if record.pre_score != record.finding.score:
+            raise ValueError(f"{context}: pre_score differs from finding.score")
+        records[key] = record
+    if records.keys() != expected_members.keys():
+        raise ValueError(f"run {run_id}: missing expected red-team records")
+
+    findings = {key: record.finding for key, record in records.items()}
+    adjustments = {}
+    for key, record in records.items():
+        expected_peers = peer_critiques(expected_members[key], findings)
+        if record.peer_critiques != expected_peers:
+            raise ValueError(f"run {run_id}, red-team persona {key}: inconsistent peer_critiques")
+        adjustments[key] = sum(peer["adjustment"] for peer in expected_peers)
+    expected_committee = deliberate(
+        {key: record.pre_score for key, record in records.items()}, adjustments,
+    )
+    for key, record in records.items():
+        if record.post_score != expected_committee.post_scores[key]:
+            raise ValueError(f"run {run_id}, red-team persona {key}: inconsistent post_score")
+    if InvestmentCommitteeResult.model_validate(committee) != expected_committee:
+        raise ValueError(f"run {run_id}: inconsistent investment_committee snapshot")

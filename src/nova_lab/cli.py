@@ -19,7 +19,7 @@ from nova_lab.experiments.learning import run_learning
 from nova_lab.experiments.positioning import run_positioning
 from nova_lab.experiments.pricing import run_pricing
 from nova_lab.experiments.privacy import run_privacy
-from nova_lab.experiments.red_team import RedTeamFinding, assess_independently, peer_critiques
+from nova_lab.experiments.red_team import assess_independently, peer_critiques, validate_red_team_records
 from nova_lab.experiments.registry import load_experiments, load_variants, validate_registry
 from nova_lab.experiments.runner import ExperimentRunner
 from nova_lab.experiments.usage import UsageSnapshot, simulate_usage
@@ -307,8 +307,11 @@ def generate_reports(run_dir: Path) -> None:
                     raise ValueError(f"missing run identifier in {name} artifact")
                 if artifact_run_id != evidence_run_id:
                     raise ValueError("mixed run identifiers")
-        for row in payloads["red_team"]:
-            RedTeamFinding.model_validate(row["finding"])
+        validate_red_team_records(
+            payloads["red_team"], run_id=evidence_run_id,
+            members=PersonaFactory(evidence["seed"]).make_red_team(),
+            committee=evidence["investment_committee"],
+        )
         observations = [ExperimentObservation.model_validate(row) for row in payloads["observations"]]
         experiments = [ExperimentDefinition.model_validate(row) for row in evidence["experiments"]]
         validate_observations(
