@@ -1,0 +1,6 @@
+seed: 20260915
+parent_count: 150
+child_count: 30
+education_count: 20
+red_team_count: 12
+output_dir: outputs
