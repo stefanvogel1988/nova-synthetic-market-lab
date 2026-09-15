@@ -1,0 +1,55 @@
+variants:
+  - variant_id: A
+    label: Audio-first, no AI
+    description: Flexible audio, playlists, local content and excellent connectivity.
+    audio_first: true
+    ai_q_and_a: false
+    curiosity_mode: false
+    learning_first: false
+    privacy_first: false
+    education_story: false
+  - variant_id: B
+    label: Audio + free AI Q&A
+    description: Audio plus open child questions without a structured learning loop.
+    audio_first: true
+    ai_q_and_a: true
+    curiosity_mode: false
+    learning_first: false
+    privacy_first: false
+    education_story: false
+  - variant_id: C
+    label: Audio + Curiosity Mode
+    description: Q&A plus short follow-up and a safe real-world exploration prompt.
+    audio_first: true
+    ai_q_and_a: true
+    curiosity_mode: true
+    learning_first: false
+    privacy_first: false
+    education_story: false
+  - variant_id: D
+    label: Learning-first AI device
+    description: Learning positioning is primary and music is secondary.
+    audio_first: false
+    ai_q_and_a: true
+    curiosity_mode: true
+    learning_first: true
+    privacy_first: false
+    education_story: false
+  - variant_id: E
+    label: Privacy-first NOVA
+    description: Push-to-talk, physical microphone kill switch and minimal retention.
+    audio_first: true
+    ai_q_and_a: true
+    curiosity_mode: true
+    learning_first: false
+    privacy_first: true
+    education_story: false
+  - variant_id: F
+    label: NOVA Home + Education
+    description: Consumer entry with explicit institutional expansion.
+    audio_first: true
+    ai_q_and_a: true
+    curiosity_mode: true
+    learning_first: false
+    privacy_first: true
+    education_story: true

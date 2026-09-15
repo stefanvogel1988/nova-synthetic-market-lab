@@ -1,0 +1,37 @@
+experiments:
+  - experiment_id: positioning-v1
+    family: positioning
+    hypothesis: "Audio plus knowledge is clearer and more trusted than an AI-music-box framing."
+    success_criteria: "At least one framing improves median clarity and trust by >=10 points without reducing purchase interest by >5 points."
+    scenario: "Parent sees a 70-word product concept description."
+    variant_ids: [A, B, C, D, E, F]
+  - experiment_id: pricing-v1
+    family: pricing
+    hypothesis: "A meaningful parent segment retains purchase preference at EUR 179 under a constrained gift budget."
+    success_criteria: "At least 25% of eligible synthetic parents select NOVA at EUR 179 with a EUR 250 gift budget; result remains synthetic-only."
+    scenario: "Choose among NOVA and competing family purchases under a fixed budget."
+    variant_ids: [C, E]
+  - experiment_id: privacy-v1
+    family: privacy
+    hypothesis: "Push-to-talk with a physical mic kill switch materially improves trust over always-on voice."
+    success_criteria: "Median trust improves by >=15 points among high-privacy parents."
+    scenario: "Compare three microphone interaction designs."
+    variant_ids: [C, E]
+  - experiment_id: learning-v1
+    family: learning
+    hypothesis: "Answer + follow-up + real-world exploration improves perceived child value versus direct answer only."
+    success_criteria: "Perceived child value improves by >=10 points without increasing friction by >10 points."
+    scenario: "Compare three response designs for common child questions."
+    variant_ids: [B, C]
+  - experiment_id: usage-v1
+    family: usage
+    hypothesis: "Curiosity Mode retains meaningful self-initiated use after novelty decays."
+    success_criteria: "Median modeled week-4 useful interactions remain >=35% of day-1 level."
+    scenario: "Simulate day 1, day 3, week 1, week 2 and week 4 scenarios."
+    variant_ids: [B, C, E]
+  - experiment_id: education-v1
+    family: education
+    hypothesis: "At least two concrete education settings show useful fit without unacceptable administration/privacy burden."
+    success_criteria: "At least two scenarios score >=65/100 for usefulness and <=40/100 for operational burden."
+    scenario: "Free-learning station, circle time, theme week, reading support, classroom music, substitute use, fleet management."
+    variant_ids: [F]
