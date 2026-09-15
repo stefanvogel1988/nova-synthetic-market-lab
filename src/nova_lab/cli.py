@@ -32,7 +32,7 @@ from nova_lab.models.product import ProductVariant
 from nova_lab.personas.factory import PersonaFactory
 from nova_lab.providers.base import JudgeEngine
 from nova_lab.providers.deterministic import DeterministicEngine
-from nova_lab.providers.judge import RubricJudge
+from nova_lab.providers.judge import RubricJudge, reconcile_parent_product_score
 from nova_lab.reporting.context import ExecutiveFinding, build_report_context
 from nova_lab.reporting.markdown import render_markdown
 from nova_lab.safety.evaluator import SafetyResult, evaluate_safety
@@ -344,15 +344,14 @@ def generate_reports(run_dir: Path) -> None:
         family_by_id = {experiment.experiment_id: experiment.family for experiment in experiments}
         family_rows = {}
         for row in observations:
+            if family_by_id[row.experiment_id] in {"positioning", "pricing", "privacy", "learning"}:
+                row.metrics["parent_product_score"] = reconcile_parent_product_score(row)
             family_rows.setdefault(family_by_id[row.experiment_id], []).append(row)
         if not {"positioning", "pricing", "education", "usage"} <= family_rows.keys():
             raise ValueError("missing report families")
         baseline = family_rows["positioning"]
-        # Older V1 artifacts have no judged metric; the local rubric can score
-        # them during report reconstruction without changing persisted inputs.
         variant_scores = {variant_id: median(
-            row.metrics["parent_product_score"] if "parent_product_score" in row.metrics
-            else RubricJudge().score(row)["parent_product_score"]
+            row.metrics["parent_product_score"]
             for row in baseline if row.variant_id == variant_id)
             for variant_id in sorted({row.variant_id for row in baseline})}
         segment_summaries = evidence["segment_summaries"]

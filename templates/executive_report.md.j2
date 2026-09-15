@@ -22,6 +22,11 @@
 {% else %}- No ranking recorded.
 {% endfor %}
 
+## Scoring assumptions and weights
+{% for item in scoring_assumptions %}- {{ item.label }}
+{% else %}- No scoring assumptions recorded.
+{% endfor %}
+
 ## Parent segment map
 {% for item in segment_map %}- {{ item.label }}
 {% else %}- No segment analysis recorded.

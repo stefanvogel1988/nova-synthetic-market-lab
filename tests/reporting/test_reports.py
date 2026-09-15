@@ -77,6 +77,25 @@ def test_executive_report_labels_each_section_finding_with_its_evidence_status()
     assert "- [SUPPORTED] Privacy-first NOVA ranks highest in the simulation." in text
 
 
+def test_executive_report_discloses_rubric_components_weights_and_uncalibrated_assumptions():
+    text = render_markdown(
+        Path("templates/executive_report.md.j2"), build_report_context()
+    )
+
+    assert "## Scoring assumptions and weights" in text
+    for component, weight in (
+        ("problem_relevance", 15), ("product_clarity", 10), ("child_value", 15),
+        ("parent_value", 10), ("trust", 15), ("differentiation", 10),
+        ("repeat_use", 10), ("price_fit", 10), ("operational_friction", 5),
+    ):
+        assert f"{component}: {weight}%" in text
+    assert "100 - operational_friction" in text
+    assert "8 points" in text
+    assert "differentiation and repeat_use are uncalibrated design heuristics" in text
+    assert "not observed differentiation or retention" in text
+    assert "does not prove product-market fit" in text
+
+
 def test_executive_report_labels_human_test_fallback_as_unknown():
     supported = EvidenceClaim(
         claim_id="price",

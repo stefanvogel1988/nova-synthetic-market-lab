@@ -82,6 +82,46 @@ def test_reports_can_rebuild_legacy_observations_without_judged_scores(tmp_path)
     assert "median judged parent/product score" in (result.run_dir / "executive_report.md").read_text()
 
 
+@pytest.mark.parametrize("family", ["positioning", "pricing", "privacy", "learning"])
+@pytest.mark.parametrize("mutation, message", [
+    ({"parent_product_score": 9000.0}, "parent_product_score"),
+    ({"parent_product_score": float("nan")}, "parent_product_score"),
+    ({"parent_product_score": float("inf")}, "parent_product_score"),
+    ({"parent_product_score": -1.0}, "parent_product_score"),
+    ({"differentiation": None}, "differentiation"),
+    ({"repeat_use": None}, "repeat_use"),
+    ({"differentiation": 101.0}, "differentiation"),
+    ({"repeat_use": float("nan")}, "repeat_use"),
+])
+def test_report_rejects_invalid_persisted_parent_rubric_before_writing(
+    tmp_path, family, mutation, message
+):
+    result = cli.run_pipeline(7, tmp_path, settings=SMALL_RUN)
+    evidence = json.loads(result.evidence_register_path.read_text())
+    experiment_id = next(row["experiment_id"] for row in evidence["experiments"]
+                         if row["family"] == family)
+    path = result.run_dir / "observations.jsonl"
+    rows = read_jsonl(path)
+    row = next(row for row in rows if row["experiment_id"] == experiment_id)
+    for component, value in mutation.items():
+        if value is None:
+            row["metrics"].pop(component)
+        else:
+            row["metrics"][component] = value
+    path.unlink()
+    append_jsonl(path, rows)
+    reports = {name: result.run_dir / name
+               for name in ("executive_report.md", "investor_summary.md")}
+    for report in reports.values():
+        report.write_text("Existing report must survive invalid reconstruction.\n")
+    before = {name: report.read_bytes() for name, report in reports.items()}
+
+    with pytest.raises(ValueError, match=message):
+        cli.generate_reports(result.run_dir)
+
+    assert {name: report.read_bytes() for name, report in reports.items()} == before
+
+
 def test_pipeline_uses_supplied_judge_on_finalized_rows_and_consumes_its_scores(tmp_path):
     # Ignoring the replaceable JudgeEngine or its result must change real artifacts.
     class FixedJudge:
