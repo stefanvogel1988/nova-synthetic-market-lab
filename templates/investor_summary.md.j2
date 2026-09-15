@@ -18,6 +18,6 @@
 {% endfor %}
 
 ## Required human validation
-{% for item in human_tests %}- {{ item }}
+{% for item in human_tests %}- {{ item.label }}
 {% else %}- None.
 {% endfor %}

@@ -56,7 +56,9 @@ def test_report_context_separates_proven_claims_from_synthetic_findings():
     assert [finding.text for finding in context["proven"]] == [proven.claim_text]
     assert [finding.text for finding in context["synthetic"]] == [supported.claim_text]
     assert proven.claim_text not in [finding.text for finding in context["synthetic"]]
-    assert context["human_tests"] == [supported.required_real_world_test]
+    assert [finding.text for finding in context["human_tests"]] == [
+        supported.required_real_world_test
+    ]
 
 
 def test_executive_report_labels_each_section_finding_with_its_evidence_status():
@@ -72,3 +74,25 @@ def test_executive_report_labels_each_section_finding_with_its_evidence_status()
     text = render_markdown(Path("templates/executive_report.md.j2"), context)
 
     assert "- [SUPPORTED] Privacy-first NOVA ranks highest in the simulation." in text
+
+
+def test_executive_report_labels_human_test_fallback_as_unknown():
+    supported = EvidenceClaim(
+        claim_id="price",
+        claim_text="Parents will pay EUR 179.",
+        category="commercial",
+        current_status=EvidenceStatus.SUPPORTED,
+        supporting_evidence=[],
+        counterevidence=[],
+        synthetic_experiments=["pricing-1"],
+        segment_notes=[],
+        confidence_note="Synthetic signal only",
+        required_real_world_test="Run a parent price smoke test",
+        next_decision="VALIDATE_WITH_HUMANS",
+    )
+
+    text = render_markdown(
+        Path("templates/executive_report.md.j2"), build_report_context([supported])
+    )
+
+    assert "- [UNKNOWN] Run a parent price smoke test" in text

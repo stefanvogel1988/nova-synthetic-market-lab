@@ -64,7 +64,9 @@ def build_report_context(
         elif claim.synthetic_experiments or claim.current_status is EvidenceStatus.SUPPORTED:
             context["synthetic"].append(finding)
         if claim.required_real_world_test:
-            context["human_tests"].append(claim.required_real_world_test)
+            context["human_tests"].append(
+                ExecutiveFinding(EvidenceStatus.UNKNOWN, claim.required_real_world_test)
+            )
 
     for name, items in sections.items():
         if name not in context:

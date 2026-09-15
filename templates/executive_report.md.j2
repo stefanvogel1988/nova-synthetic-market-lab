@@ -64,6 +64,6 @@
 
 ## Human-validation priority list
 {% for item in human_validation_priorities %}- {{ item.label }}
-{% else %}{% for item in human_tests %}- {{ item }}
+{% else %}{% for item in human_tests %}- {{ item.label }}
 {% else %}- No human-validation priorities recorded.
 {% endfor %}{% endfor %}

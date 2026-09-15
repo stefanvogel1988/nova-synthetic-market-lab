@@ -12,6 +12,7 @@ EXECUTIVE_FINDING_SECTIONS = (
     "synthetic",
     "contested",
     "evidence_register",
+    "human_tests",
     *REPORT_SECTION_NAMES,
 )
 
