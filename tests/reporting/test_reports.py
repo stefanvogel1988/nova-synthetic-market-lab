@@ -2,7 +2,7 @@ from pathlib import Path
 
 from nova_lab.models.common import EvidenceSourceType, EvidenceStatus
 from nova_lab.models.evidence import EvidenceClaim, EvidenceSource
-from nova_lab.reporting.context import build_report_context
+from nova_lab.reporting.context import ExecutiveFinding, build_report_context
 from nova_lab.reporting.markdown import render_markdown
 
 
@@ -53,7 +53,22 @@ def test_report_context_separates_proven_claims_from_synthetic_findings():
 
     context = build_report_context([proven, supported])
 
-    assert context["proven"] == [proven.claim_text]
-    assert context["synthetic"] == [supported.claim_text]
-    assert proven.claim_text not in context["synthetic"]
+    assert [finding.text for finding in context["proven"]] == [proven.claim_text]
+    assert [finding.text for finding in context["synthetic"]] == [supported.claim_text]
+    assert proven.claim_text not in [finding.text for finding in context["synthetic"]]
     assert context["human_tests"] == [supported.required_real_world_test]
+
+
+def test_executive_report_labels_each_section_finding_with_its_evidence_status():
+    context = build_report_context(
+        product_ranking=[
+            ExecutiveFinding(
+                status=EvidenceStatus.SUPPORTED,
+                text="Privacy-first NOVA ranks highest in the simulation.",
+            )
+        ]
+    )
+
+    text = render_markdown(Path("templates/executive_report.md.j2"), context)
+
+    assert "- [SUPPORTED] Privacy-first NOVA ranks highest in the simulation." in text

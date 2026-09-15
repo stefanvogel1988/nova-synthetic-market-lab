@@ -3,17 +3,17 @@
 > **Synthetic-evidence disclaimer:** Synthetic simulation is directional. It does not prove product-market fit, real purchase intent, learning outcomes, or future revenue.
 
 ## PROVEN / external or observed evidence
-{% for item in proven %}- {{ item }}
+{% for item in proven %}- {{ item.label }}
 {% else %}- None recorded in this synthetic run.
 {% endfor %}
 
 ## SYNTHETIC findings
-{% for item in synthetic %}- {{ item }}
+{% for item in synthetic %}- {{ item.label }}
 {% else %}- None.
 {% endfor %}
 
 ## CONTESTED findings
-{% for item in contested %}- {{ item }}
+{% for item in contested %}- {{ item.label }}
 {% else %}- None.
 {% endfor %}
 
