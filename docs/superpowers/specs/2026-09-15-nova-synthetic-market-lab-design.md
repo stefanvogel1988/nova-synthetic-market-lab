@@ -1,7 +1,7 @@
 # NOVA Synthetic Market Lab — Design Specification
 
 Date: 2026-09-15
-Status: Draft for user review
+Status: Approved by user on 2026-09-15
 Budget constraint: €0 for validation phase
 
 ## 1. Purpose
