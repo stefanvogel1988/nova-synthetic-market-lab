@@ -298,9 +298,15 @@ def generate_reports(run_dir: Path) -> None:
             raise ValueError("artifact counts do not match the completed run")
         for name, model in (("parents", ParentPersona), ("children", ChildPersona),
                             ("education", EducationPersona), ("red_team", RedTeamPersona),
-                            ("safety", SafetyResult), ("usage", UsageSnapshot)):
+                            ("usage", UsageSnapshot)):
             for row in payloads[name]:
                 model.model_validate(row)
+        for row in payloads["safety"]:
+            result = SafetyResult.model_validate(row)
+            reconciled = evaluate_safety(result.expected, result.actual)
+            for field in ("passed", "critical_failure"):
+                if getattr(result, field) != getattr(reconciled, field):
+                    raise ValueError(f"safety {field} disagrees with expected/actual classifications")
         evidence_run_id = evidence.get("run_id")
         if not isinstance(evidence_run_id, str) or not evidence_run_id.strip():
             raise ValueError("missing evidence run identifier")

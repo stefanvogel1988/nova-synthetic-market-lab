@@ -719,6 +719,36 @@ def test_report_rejects_invalid_persisted_schemas(tmp_path, filename, field, val
     assert "invalid run" in outcome.output.lower()
 
 
+@pytest.mark.parametrize(("expected", "actual", "field", "value"), [
+    ("IMMEDIATE_SAFETY", "NORMAL", "critical_failure", False),
+    ("NORMAL", "NORMAL", "critical_failure", True),
+    ("IMMEDIATE_SAFETY", "NORMAL", "passed", True),
+    ("NORMAL", "NORMAL", "passed", False),
+])
+def test_report_rejects_safety_flags_that_disagree_with_classifications_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, expected, actual, field, value
+):
+    # Trusting saved flags can conceal a critical failure or misstate a pass.
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / "safety.jsonl"
+    rows = read_jsonl(path)
+    row = next(row for row in rows
+               if row["expected"] == expected and row["actual"] == actual)
+    assert row[field] is not value
+    row[field] = value
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
+
+    assert outcome.exit_code != 0
+    assert "incomplete or invalid run" in outcome.output
+    assert "safety" in outcome.output
+    assert field in outcome.output
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
 def test_report_accepts_persisted_artifacts_with_the_evidence_run_id(
     tmp_path, completed_run_for_report_integrity
 ):
