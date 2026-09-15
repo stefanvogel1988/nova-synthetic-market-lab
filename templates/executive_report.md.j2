@@ -1,0 +1,74 @@
+# NOVA Synthetic Validation — Executive Report
+
+> **Synthetic-evidence disclaimer:** Synthetic simulation is directional. It does not prove product-market fit, real purchase intent, learning outcomes, or future revenue. Synthetic findings below are not observed human behavior or revenue forecasts.
+
+## PROVEN / external or observed evidence
+{% for item in proven %}- {{ item.label }}
+{% else %}- None recorded. Synthetic evidence cannot be labelled PROVEN.
+{% endfor %}
+
+## SYNTHETIC findings
+{% for item in synthetic %}- {{ item.label }}
+{% else %}- None.
+{% endfor %}
+
+## CONTESTED findings
+{% for item in contested %}- {{ item.label }}
+{% else %}- None.
+{% endfor %}
+
+## Product variant ranking
+{% for item in product_ranking %}- {{ item.label }}
+{% else %}- No ranking recorded.
+{% endfor %}
+
+## Scoring assumptions and weights
+{% for item in scoring_assumptions %}- {{ item.label }}
+{% else %}- No scoring assumptions recorded.
+{% endfor %}
+
+## Parent segment map
+{% for item in segment_map %}- {{ item.label }}
+{% else %}- No segment analysis recorded.
+{% endfor %}
+
+## Child usage risk map
+{% for item in usage_risks %}- {{ item.label }}
+{% else %}- No usage risks recorded.
+{% endfor %}
+
+## Education opportunity map
+{% for item in education_opportunities %}- {{ item.label }}
+{% else %}- No education opportunities recorded.
+{% endfor %}
+
+## Price sensitivity simulation
+{% for item in price_sensitivity %}- {{ item.label }}
+{% else %}- No price-sensitivity results recorded.
+{% endfor %}
+
+## Red Team report
+{% for item in red_team %}- {{ item.label }}
+{% else %}- No red-team findings recorded.
+{% endfor %}
+
+## Virtual Investment Committee memo
+{% for item in investment_committee %}- {{ item.label }}
+{% else %}- No investment-committee findings recorded.
+{% endfor %}
+
+## Safety evaluation report
+{% for item in safety %}- {{ item.label }}
+{% else %}- No safety evaluation recorded.
+{% endfor %}
+
+## Evidence register
+{% for item in evidence_register %}- {{ item.label }}
+{% else %}- No evidence claims recorded.
+{% endfor %}
+
+## Human-validation priority list
+{% for item in human_validation_priorities %}- {{ item.label }}
+{% else %}{% for item in human_tests %}- {{ item.label }}
+{% else %}- No human-validation priorities recorded.
+{% endfor %}{% endfor %}
