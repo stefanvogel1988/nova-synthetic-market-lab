@@ -5,6 +5,34 @@ from nova_lab.personas.factory import PersonaFactory
 from nova_lab.experiments.registry import load_variants
 from pathlib import Path
 
+from nova_lab.scoring.rubrics import PARENT_WEIGHTS
+
+
+def test_new_components_respond_to_product_inputs_and_seed():
+    parent = PersonaFactory(7).make_parents(1)[0]
+    variants = load_variants(Path("config/variants.yaml"))
+    engine = DeterministicEngine(7)
+    basic = engine.evaluate_parent(parent, variants["A"], {})
+    curiosity = engine.evaluate_parent(parent, variants["C"], {})
+    other_seed = DeterministicEngine(42).evaluate_parent(parent, variants["C"], {})
+    for component in ("differentiation", "repeat_use"):
+        assert curiosity.metrics[component] > basic.metrics[component]
+        assert curiosity.metrics[component] != other_seed.metrics[component]
+
+
+def test_all_parent_rubric_components_are_explicit_bounded_and_repeatable():
+    variants = load_variants(Path("config/variants.yaml"))
+    for seed in (1, 7, 42):
+        for parent in PersonaFactory(seed).make_parents(10):
+            for variant in variants.values():
+                context = {"price_eur": 229, "learning_design": "exploration"}
+                row = DeterministicEngine(seed).evaluate_parent(parent, variant, context)
+                assert PARENT_WEIGHTS.keys() <= row.metrics.keys()
+                assert all(0 <= row.metrics[key] <= 100 for key in PARENT_WEIGHTS)
+                assert "differentiation" in row.rationale
+                assert "repeat_use" in row.rationale
+                assert row == DeterministicEngine(seed).evaluate_parent(parent, variant, context)
+
 
 def test_privacy_first_variant_scores_higher_for_high_privacy_parent():
     parent = ParentPersona(

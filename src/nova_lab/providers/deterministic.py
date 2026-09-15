@@ -76,6 +76,18 @@ class DeterministicEngine:
             - subscription - subscription_penalty
         )
         noise = rng.uniform(-3, 3)
+        # Uncalibrated synthetic hypotheses, not observed distinctiveness or
+        # retention. Reuse the paired draw so existing seed behavior is stable.
+        differentiation = (
+            25 + 20 * variant.ai_q_and_a + 15 * variant.curiosity_mode
+            + 10 * variant.learning_first + 10 * variant.privacy_first
+        )
+        repeat_use = child_value + 10 * variant.audio_first - 0.5 * friction - 0.1 * (100 - trust)
+        assumptions.extend([
+            "differentiation: uncalibrated 25 + 20*ai_q_and_a + 15*curiosity_mode + 10*learning_first + 10*privacy_first",
+            "repeat_use: uncalibrated child_value + 10*audio_first - 0.5*operational_friction - 0.1*(100-trust); not observed retention",
+            "differentiation/repeat_use add paired seed noise and clamp to 0--100",
+        ])
         metrics = {
             "problem_relevance": self._clamp(relevance + noise),
             "product_clarity": self._clamp(clarity + noise),
@@ -83,6 +95,8 @@ class DeterministicEngine:
             "child_value": self._clamp(child_value + noise),
             "parent_value": self._clamp((relevance + child_value) / 2 + noise),
             "trust": self._clamp(trust + noise),
+            "differentiation": self._clamp(differentiation + noise),
+            "repeat_use": self._clamp(repeat_use + noise),
             "price_fit": self._clamp(price_fit + noise),
             "purchase_interest": self._clamp(
                 (relevance + child_value + trust + price_fit) / 4 - 5

@@ -16,13 +16,16 @@ PARENT_WEIGHTS = {
 def parent_product_score(metrics: dict[str, float]) -> float:
     """Calculate the published parent/product score from 0--100 metrics.
 
-    Unspecified measures use a neutral midpoint. Operational friction is the
-    sole inverse measure: more friction lowers the resulting score.
+    Every weighted component must be explicit; missing values are not evidence
+    for a neutral score. Operational friction is the sole inverse measure.
     """
 
+    missing = PARENT_WEIGHTS.keys() - metrics.keys()
+    if missing:
+        raise ValueError(f"missing mandatory parent/product rubric components: {', '.join(sorted(missing))}")
     total = 0.0
     for key, weight in PARENT_WEIGHTS.items():
-        value = metrics.get(key, 50.0)
+        value = metrics[key]
         if key == "operational_friction":
             value = 100 - value
         total += value * weight / 100

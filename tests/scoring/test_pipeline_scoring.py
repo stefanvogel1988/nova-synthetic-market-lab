@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from nova_lab import cli
 from nova_lab.providers.deterministic import DeterministicEngine
 from nova_lab.scoring import rubrics
@@ -8,6 +10,44 @@ from nova_lab.storage.jsonl import append_jsonl, read_jsonl
 
 
 SMALL_RUN = LabSettings(parent_count=2, child_count=1, education_count=1)
+
+
+def test_fixed_seed_persists_explicit_rubric_components_and_reproducible_scores(tmp_path):
+    runs = [cli.run_pipeline(7, tmp_path, settings=SMALL_RUN) for _ in range(2)]
+    rows = [read_jsonl(run.run_dir / "observations.jsonl") for run in runs]
+    metrics = [[row["metrics"] for row in run_rows if "purchase_interest" in row["metrics"]]
+               for run_rows in rows]
+    assert metrics[0]
+    for row_metrics in metrics[0]:
+        assert rubrics.PARENT_WEIGHTS.keys() <= row_metrics.keys()
+        assert "parent_product_score" in row_metrics
+    assert metrics[0] == metrics[1]
+
+
+@pytest.mark.parametrize("component", ["differentiation", "repeat_use"])
+def test_pipeline_scores_use_each_generated_component(tmp_path, monkeypatch, component):
+    class ComponentEngine(DeterministicEngine):
+        value = 0.0
+
+        def evaluate_parent(self, parent, variant, context):
+            row = super().evaluate_parent(parent, variant, context)
+            row.metrics[component] = self.value
+            return row
+
+    monkeypatch.setattr(cli, "DeterministicEngine", ComponentEngine)
+    low = cli.run_pipeline(7, tmp_path, settings=SMALL_RUN)
+    ComponentEngine.value = 100.0
+    high = cli.run_pipeline(7, tmp_path, settings=SMALL_RUN)
+    low_rows = read_jsonl(low.run_dir / "observations.jsonl")
+    high_rows = read_jsonl(high.run_dir / "observations.jsonl")
+    pairs = [(a, b) for a, b in zip(low_rows, high_rows)
+             if "purchase_interest" in a["metrics"] and not a["objections"]]
+    assert pairs
+    for a, b in pairs:
+        assert a["metrics"][component] == 0.0
+        assert b["metrics"][component] == 100.0
+        # Each final score is rounded to cents independently.
+        assert b["metrics"]["parent_product_score"] - a["metrics"]["parent_product_score"] == pytest.approx(10.0, abs=0.011)
 
 
 def test_rubric_weight_change_changes_persisted_scores_and_product_ranking(tmp_path, monkeypatch):

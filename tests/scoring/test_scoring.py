@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 
+import pytest
+
 from nova_lab.scoring.aggregate import summarize_by_segment
 from nova_lab.scoring.bias import (
     apply_positivity_penalty,
     detect_preference_decision_contradiction,
 )
-from nova_lab.scoring.rubrics import parent_product_score
+from nova_lab.scoring.rubrics import PARENT_WEIGHTS, parent_product_score
 
 
 def test_parent_score_uses_declared_weights():
@@ -24,8 +26,25 @@ def test_parent_score_uses_declared_weights():
     assert parent_product_score(metrics) == 100
 
 
-def test_parent_score_inverts_operational_friction_and_defaults_missing_metrics():
-    assert parent_product_score({"operational_friction": 100}) == 47.5
+def test_parent_score_inverts_operational_friction():
+    metrics = dict.fromkeys(PARENT_WEIGHTS, 50.0)
+    metrics["operational_friction"] = 100
+    assert parent_product_score(metrics) == 47.5
+
+
+@pytest.mark.parametrize("component", PARENT_WEIGHTS)
+def test_parent_score_rejects_missing_mandatory_component(component):
+    metrics = dict.fromkeys(PARENT_WEIGHTS, 50.0)
+    del metrics[component]
+    with pytest.raises(ValueError, match=component):
+        parent_product_score(metrics)
+
+
+@pytest.mark.parametrize("component", ["differentiation", "repeat_use"])
+def test_parent_score_uses_explicit_component_value(component):
+    metrics = dict.fromkeys(PARENT_WEIGHTS, 50.0)
+    metrics[component] = 80
+    assert parent_product_score(metrics) == 53.0
 
 
 def test_positive_claim_with_rejection_is_penalized():
