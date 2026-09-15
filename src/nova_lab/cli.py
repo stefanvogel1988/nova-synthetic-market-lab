@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -78,7 +79,9 @@ def run_pipeline(
     education = factory.make_education(settings.education_count)
     red_team = factory.make_red_team()
     for name, personas in (("parents", parents), ("children", children), ("education", education)):
-        append_jsonl(run_dir / f"{name}.jsonl", [persona.model_dump(mode="json") for persona in personas])
+        append_jsonl(run_dir / f"{name}.jsonl", [
+            {"run_id": run_id, **persona.model_dump(mode="json")} for persona in personas
+        ])
 
     runner = ExperimentRunner(DeterministicEngine(seed), seed)
     judge = judge if judge is not None else RubricJudge()
@@ -295,7 +298,8 @@ def generate_reports(run_dir: Path) -> None:
         evidence_run_id = evidence.get("run_id")
         if not isinstance(evidence_run_id, str) or not evidence_run_id.strip():
             raise ValueError("missing evidence run identifier")
-        for name in ("usage", "red_team", "safety", *(["child_events"] if "child_events" in payloads else [])):
+        for name in ("parents", "children", "education", "usage", "red_team", "safety",
+                     *(["child_events"] if "child_events" in payloads else [])):
             for row in payloads[name]:
                 artifact_run_id = row.get("run_id")
                 if not isinstance(artifact_run_id, str) or not artifact_run_id.strip():
@@ -347,6 +351,37 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
         return ExecutiveFinding(EvidenceStatus.SUPPORTED, text)
 
     periods = list(dict.fromkeys(row["period"] for row in usage))
+    event_risks = []
+    for period in periods:
+        rows = [row for row in usage if row["period"] == period and row.get("event_ids")]
+        if not rows:
+            continue
+        event_count = sum(len(row["event_ids"]) for row in rows)
+        situation_count = sum(row["scenario_count"] for row in rows)
+        reasons = Counter()
+        for row in rows:
+            reasons.update(row.get("abandonment_reasons", {}))
+        reason_counts = ", ".join(
+            f"{reason}={count}/{event_count} events" for reason, count in sorted(reasons.items())
+        ) or f"none recorded=0/{event_count} events"
+        event_risks.extend([
+            finding(
+                f"{period}: synthetic event-derived abandonment reasons: {reason_counts}. "
+                "Denominator: all child interaction events at this checkpoint; "
+                "counts are not unique children or situations; not observed child behavior."
+            ),
+            finding(
+                f"{period}: median modeled frustration={median(row['frustration'] for row in rows):.2f}/1 "
+                f"across {len(rows)} event-backed snapshots; each snapshot stores mean final-state "
+                "frustration across its situations; synthetic only, not observed child behavior."
+            ),
+            finding(
+                f"{period}: modeled adult interventions={sum(row['parent_interventions'] for row in rows):g}/"
+                f"{situation_count} situations across {len(rows)} event-backed snapshots; "
+                "counts situations with explicit adult help, not unique adults or children; "
+                "synthetic only, not observed child behavior."
+            ),
+        ])
     critical_count = sum(row["critical_failure"] for row in safety)
     education_rows = family_rows["education"]
     education_fit = sum(
@@ -378,6 +413,7 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
                     "Comprehension and event outcomes are uncalibrated design heuristics, not observed child behavior."
                 ),
             ] if any(row.get("event_ids") for row in usage) else []),
+            *event_risks,
             *[
                 finding(
                     f"{period}: engaged at checkpoint sessions="

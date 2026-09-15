@@ -274,6 +274,31 @@ def test_executive_report_shows_education_usage_and_safety_risk_distributions(tm
         assert f"{category}={critical}/{len(rows)}" in report
 
 
+@pytest.mark.parametrize("expected", [
+    "day_1: synthetic event-derived abandonment reasons: adult_unavailable=6/198 events, "
+    "attention_or_novelty_decay=16/198 events, child_bored=6/198 events, "
+    "no_internet=6/198 events, sibling_competition=6/198 events",
+    "day_1: median modeled frustration=0.21/1 across 6 event-backed snapshots",
+    "day_1: modeled adult interventions=23/60 situations across 6 event-backed snapshots",
+    "week_4: modeled adult interventions=29/60 situations across 6 event-backed snapshots",
+])
+def test_report_renders_existing_event_risks_with_denominators(
+    tmp_path, completed_run_for_report_integrity, expected
+):
+    # Losing an existing risk field or counting snapshots as event/situation denominators fails.
+    from nova_lab.cli import generate_reports
+
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    generate_reports(run_dir)
+    report = (run_dir / "executive_report.md").read_text(encoding="utf-8")
+
+    matching = [line for line in report.splitlines() if expected in line]
+    assert len(matching) == 1, f"Missing persisted usage risk: {expected}"
+    assert matching[0].startswith("- [SUPPORTED]")
+    assert "synthetic" in matching[0].lower()
+    assert "not observed child behavior" in matching[0]
+
+
 def test_report_labels_lapse_to_reengagement_as_checkpoint_state(tmp_path):
     from nova_lab.cli import run_pipeline
     from nova_lab.settings import LabSettings
@@ -361,6 +386,51 @@ def test_report_accepts_persisted_artifacts_with_the_evidence_run_id(
     outcome = CliRunner().invoke(app, ["report", "--run-dir", str(run_dir)])
 
     assert outcome.exit_code == 0, outcome.output
+
+
+@pytest.mark.parametrize("filename", ["parents", "children", "education"])
+@pytest.mark.parametrize("foreign_seed", [7, 19])
+def test_report_rejects_foreign_population_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, filename, foreign_seed
+):
+    # Repeated persona IDs and matching counts must not authorize another run's population.
+    from nova_lab.cli import generate_reports, run_pipeline
+    from nova_lab.settings import LabSettings
+
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    foreign = run_pipeline(
+        foreign_seed, tmp_path / "foreign",
+        settings=LabSettings(parent_count=2, child_count=2, education_count=2),
+    ).run_dir
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+    shutil.copyfile(foreign / f"{filename}.jsonl", run_dir / f"{filename}.jsonl")
+
+    with pytest.raises(ValueError, match="mixed run identifiers"):
+        generate_reports(run_dir)
+
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
+
+
+@pytest.mark.parametrize("filename", ["parents", "children", "education"])
+def test_report_rejects_unbound_population_before_rewriting(
+    tmp_path, completed_run_for_report_integrity, filename
+):
+    # A missing identifier must not silently bypass population provenance checks.
+    from nova_lab.cli import generate_reports
+
+    run_dir = copied_completed_run(completed_run_for_report_integrity, tmp_path)
+    path = run_dir / f"{filename}.jsonl"
+    rows = read_jsonl(path)
+    rows[0].pop("run_id", None)
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    reports = {name: (run_dir / name).read_bytes()
+               for name in ("executive_report.md", "investor_summary.md")}
+
+    with pytest.raises(ValueError, match="missing run identifier"):
+        generate_reports(run_dir)
+
+    assert {name: (run_dir / name).read_bytes() for name in reports} == reports
 
 
 @pytest.mark.parametrize("artifact_names", REPORT_RUN_ID_ARTIFACTS)
