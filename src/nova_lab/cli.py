@@ -349,7 +349,7 @@ def report_context(claims, family_rows, variant_scores, segment_summaries, usage
         usage_risks=[
             *[
                 finding(
-                    f"{period}: retained engaged sessions="
+                    f"{period}: engaged at checkpoint sessions="
                     f"{sum(row['session_state']['mode'] == 'engaged' for row in rows)}/{len(rows)}; "
                     f"lapsed sessions={sum(row['session_state']['mode'] == 'lapsed' for row in rows)}/{len(rows)}; "
                     f"median modeled useful interactions={median(row['useful_interactions'] for row in rows):.2f}; "

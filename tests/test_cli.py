@@ -253,10 +253,12 @@ def test_executive_report_shows_education_usage_and_safety_risk_distributions(tm
     usage = read_jsonl(result.run_dir / "usage.jsonl")
     for period in ("day_1", "day_3", "week_1", "week_2", "week_4"):
         rows = [row for row in usage if row["period"] == period]
-        retained = sum(row["session_state"]["mode"] == "engaged" for row in rows)
+        engaged_at_checkpoint = sum(
+            row["session_state"]["mode"] == "engaged" for row in rows
+        )
         lapsed = sum(row["session_state"]["mode"] == "lapsed" for row in rows)
         assert (
-            f"{period}: retained engaged sessions={retained}/{len(rows)}; "
+            f"{period}: engaged at checkpoint sessions={engaged_at_checkpoint}/{len(rows)}; "
             f"lapsed sessions={lapsed}/{len(rows)}"
         ) in report
     assert "Negative usage signal distribution across 30-day snapshots: lapsed=" in report
@@ -270,6 +272,45 @@ def test_executive_report_shows_education_usage_and_safety_risk_distributions(tm
         rows = [row for row in safety if row["category"] == category]
         critical = sum(row["critical_failure"] for row in rows)
         assert f"{category}={critical}/{len(rows)}" in report
+
+
+def test_report_labels_lapse_to_reengagement_as_checkpoint_state(tmp_path):
+    from nova_lab.cli import run_pipeline
+    from nova_lab.settings import LabSettings
+
+    result = run_pipeline(
+        7,
+        tmp_path,
+        settings=LabSettings(parent_count=2, child_count=2, education_count=2),
+    )
+    usage_path = result.run_dir / "usage.jsonl"
+    usage = read_jsonl(usage_path)
+    persona_id, variant_id = usage[0]["persona_id"], usage[0]["variant_id"]
+    week_2 = next(
+        row for row in usage
+        if (row["persona_id"], row["variant_id"], row["period"])
+        == (persona_id, variant_id, "week_2")
+    )
+    week_4 = next(
+        row for row in usage
+        if (row["persona_id"], row["variant_id"], row["period"])
+        == (persona_id, variant_id, "week_4")
+    )
+    week_2["session_state"]["mode"] = "lapsed"
+    week_2["useful_interactions"] = 0
+    week_4["session_state"]["mode"] = "engaged"
+    week_4["useful_interactions"] = 1
+    usage_path.write_text(
+        "\n".join(json.dumps(row) for row in usage) + "\n", encoding="utf-8"
+    )
+
+    outcome = CliRunner().invoke(app, ["report", "--run-dir", str(result.run_dir)])
+    report = (result.run_dir / "executive_report.md").read_text(encoding="utf-8")
+
+    assert outcome.exit_code == 0, outcome.output
+    assert "week_2: engaged at checkpoint sessions=" in report
+    assert "week_4: engaged at checkpoint sessions=" in report
+    assert "retained engaged sessions" not in report
 
 
 def test_report_rejects_partially_truncated_run_before_rewriting_reports(tmp_path):
