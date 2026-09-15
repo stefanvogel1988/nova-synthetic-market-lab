@@ -5,6 +5,23 @@ from nova_lab.models.evidence import EvidenceClaim, EvidenceSource
 from nova_lab.models.experiment import ExperimentObservation
 
 
+HUMAN_VALIDATION_ACTIONS = {
+    "positioning": "Conduct parent concept interviews",
+    "pricing": "Run a parent price smoke test",
+    "privacy": "Run moderated parent trust interviews",
+    "learning": "Observe parent-child learning sessions",
+    "usage": "Run a child-use diary study",
+    "education": "Conduct educator classroom-fit interviews",
+}
+
+
+def human_validation_step(category: str, claim_text: str) -> str:
+    action = HUMAN_VALIDATION_ACTIONS.get(
+        category, "Conduct a claim-specific human interview"
+    )
+    return f"{action} for: {claim_text}"
+
+
 class EvidenceRegister:
     def __init__(self):
         self._claims: dict[str, EvidenceClaim] = {}
@@ -20,7 +37,7 @@ class EvidenceRegister:
             synthetic_experiments=[],
             segment_notes=[],
             confidence_note="not yet tested",
-            required_real_world_test="human validation",
+            required_real_world_test=human_validation_step(category, text),
             next_decision="VALIDATE_WITH_HUMANS",
         )
         self._claims[claim_id] = claim

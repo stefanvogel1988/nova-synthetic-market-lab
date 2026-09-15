@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from nova_lab.evidence.register import EvidenceRegister
 from nova_lab.models.common import EvidenceSourceType, EvidenceStatus
 from nova_lab.models.evidence import EvidenceClaim, EvidenceSource
 from nova_lab.reporting.context import ExecutiveFinding, build_report_context
@@ -96,3 +97,26 @@ def test_executive_report_labels_human_test_fallback_as_unknown():
     )
 
     assert "- [UNKNOWN] Run a parent price smoke test" in text
+
+
+def test_human_validation_steps_are_concrete_deduplicated_and_sorted():
+    """Retaining generic/repeated human-validation text would hide next actions."""
+    register = EvidenceRegister()
+    register.add_claim(
+        "usage-1",
+        "Curiosity Mode retains meaningful self-initiated use after novelty decays.",
+        "usage",
+    )
+    register.add_claim(
+        "pricing-1", "Parents will pay EUR 179.", "pricing"
+    )
+    register.add_claim(
+        "pricing-duplicate", "Parents will pay EUR 179.", "pricing"
+    )
+
+    context = build_report_context(register.all())
+
+    assert [item.label for item in context["human_tests"]] == [
+        "[UNKNOWN] Run a child-use diary study for: Curiosity Mode retains meaningful self-initiated use after novelty decays.",
+        "[UNKNOWN] Run a parent price smoke test for: Parents will pay EUR 179.",
+    ]

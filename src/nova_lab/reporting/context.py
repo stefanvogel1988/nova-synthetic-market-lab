@@ -53,6 +53,7 @@ def build_report_context(
         **{name: [] for name in REPORT_SECTION_NAMES},
     }
 
+    human_test_texts = set()
     for claim in claims:
         finding = ExecutiveFinding(claim.current_status, claim.claim_text)
         context["evidence_register"].append(finding)
@@ -64,9 +65,12 @@ def build_report_context(
         elif claim.synthetic_experiments or claim.current_status is EvidenceStatus.SUPPORTED:
             context["synthetic"].append(finding)
         if claim.required_real_world_test:
-            context["human_tests"].append(
-                ExecutiveFinding(EvidenceStatus.UNKNOWN, claim.required_real_world_test)
-            )
+            human_test_texts.add(claim.required_real_world_test)
+
+    context["human_tests"] = [
+        ExecutiveFinding(EvidenceStatus.UNKNOWN, text)
+        for text in sorted(human_test_texts)
+    ]
 
     for name, items in sections.items():
         if name not in context:
