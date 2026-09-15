@@ -40,11 +40,13 @@ class PersonaFactory:
         parent_streams = self._balanced_parent_dimension(streams, count, "streaming_service")
         parent_screens = self._balanced_parent_dimension(screens, count, "screen_philosophy")
         parent_devices = self._balanced_parent_dimension(devices, count, "device_ownership")
+        parent_child_counts = self._balanced_parent_dimension([1, 2, 3], count, "child_count")
+        parent_locales = self._balanced_parent_dimension(locales, count, "locale_type")
         return [
             ParentPersona(
                 persona_id=f"parent-{index:03d}",
                 child_age=child_ages[index],
-                child_count=1 + (index % 3),
+                child_count=parent_child_counts[index],
                 disposable_budget_eur=parent_budgets[index],
                 price_sensitivity=self._score(),
                 ai_attitude=parent_attitudes[index],
@@ -56,7 +58,7 @@ class PersonaFactory:
                 education_orientation=self._score(),
                 convenience_orientation=self._score(),
                 screen_time_philosophy=parent_screens[index],
-                locale_type=locales[index % len(locales)],
+                locale_type=parent_locales[index],
             )
             for index in range(count)
         ]

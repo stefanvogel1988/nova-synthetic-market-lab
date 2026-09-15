@@ -50,6 +50,8 @@ def test_parent_dimensions_remain_marginally_balanced():
         [parent.streaming_service for parent in parents],
         [parent.screen_time_philosophy for parent in parents],
         [tuple(parent.existing_devices) for parent in parents],
+        [parent.child_count for parent in parents],
+        [parent.locale_type for parent in parents],
     ):
         counts = {value: values.count(value) for value in set(values)}
         assert max(counts.values()) - min(counts.values()) <= 1
@@ -62,6 +64,12 @@ def test_parent_dimensions_are_not_mechanically_one_to_one_coupled():
     assert len({(parent.ai_attitude, parent.streaming_service) for parent in parents}) > 4
     assert len({(parent.ai_attitude, parent.screen_time_philosophy) for parent in parents}) > 4
     assert len({(parent.streaming_service, tuple(parent.existing_devices)) for parent in parents}) > 12
+
+
+def test_parent_child_count_and_locale_type_are_not_mechanically_one_to_one_coupled():
+    parents = PersonaFactory(seed=7).make_parents(120)
+
+    assert len({(parent.child_count, parent.locale_type) for parent in parents}) > 3
 
 
 def test_factory_generates_required_non_parent_populations():
