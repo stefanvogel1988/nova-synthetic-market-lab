@@ -55,3 +55,12 @@ def test_high_curiosity_is_retained_while_low_curiosity_can_lapse_by_week_four()
 
     assert high_curiosity[-1].useful_interactions > 0
     assert low_curiosity[-1].useful_interactions == 0
+
+
+def test_lapsed_session_can_spontaneously_reengage_at_a_later_checkpoint():
+    snapshots = simulate_usage(_child(0.0), _variant(), seed=7)
+
+    assert snapshots[3].session_state.mode == "lapsed"
+    assert snapshots[3].useful_interactions == 0
+    assert snapshots[4].session_state.mode == "engaged"
+    assert snapshots[4].useful_interactions > 0

@@ -50,3 +50,27 @@ def advance_session(state: ChildSessionState, question: ChildQuestion) -> ChildS
         mode="engaged",
         needs_parent=False,
     )
+
+
+def lapse_session(state: ChildSessionState) -> ChildSessionState:
+    """Record a synthetic lapse after interest falls below the scenario threshold."""
+    return ChildSessionState(
+        interest=max(0.0, state.interest - 0.2),
+        frustration=min(1.0, state.frustration + 0.1),
+        mode="lapsed",
+        needs_parent=False,
+    )
+
+
+def spontaneously_reengage(
+    state: ChildSessionState, *, triggered: bool
+) -> ChildSessionState:
+    """Return a lapsed synthetic session to engaged when its seeded event triggers."""
+    if state.mode != "lapsed" or not triggered:
+        return state
+    return ChildSessionState(
+        interest=min(1.0, state.interest + 0.25),
+        frustration=max(0.0, state.frustration - 0.1),
+        mode="engaged",
+        needs_parent=False,
+    )
